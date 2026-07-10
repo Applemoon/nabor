@@ -1,0 +1,9 @@
+.venv/
+library/
+config.toml
+progress.json
+stats.jsonl
+*.log
+__pycache__/
+*.pyc
+*.egg-info/
