@@ -556,7 +556,19 @@ class SearchScreen(ModalScreen):
 
 
 class StatsScreen(Screen):
-    BINDINGS = [Binding("escape", "back", "Назад")]
+    BINDINGS = [Binding("escape", "back", "Назад"),
+                Binding("ctrl+r", "reset_errors", "Сбросить промахи")]
+
+    def action_reset_errors(self):
+        # type: () -> None
+        """Промахи по символам — единственное, что сбрасывается: скорость,
+        время и точность в журнале остаются."""
+        wiped = storage.clear_char_errors()
+        if self.app.engine is not None:
+            self.app.engine.stats.char_errors.clear()
+        self.query_one("#stats-body", Static).update(self._build())
+        self.notify(f"Промахи сброшены ({wiped})" if wiped
+                    else "Промахов и так нет")
 
     def compose(self):
         # type: () -> ComposeResult

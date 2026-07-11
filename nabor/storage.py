@@ -70,3 +70,20 @@ def append_session(record):
         return
     with open(STATS_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def clear_char_errors():
+    # type: () -> int
+    """Забыть промахи по символам во всех сессиях; скорость, время и
+    точность остаются. Возвращает, сколько промахов стёрли."""
+    sessions = read_sessions()
+    wiped = sum(sum(s.get("char_errors", {}).values()) for s in sessions)
+    if not wiped:
+        return 0
+    for s in sessions:
+        s.pop("char_errors", None)
+    tmp = STATS_PATH.with_suffix(STATS_PATH.suffix + ".tmp")
+    tmp.write_text("".join(json.dumps(s, ensure_ascii=False) + "\n"
+                           for s in sessions), encoding="utf-8")
+    tmp.replace(STATS_PATH)  # атомарно: журнал не порвётся на полуслове
+    return wiped
