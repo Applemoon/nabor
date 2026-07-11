@@ -129,22 +129,34 @@ class Engine:
 
     # --- текущая глава ---------------------------------------------------
 
+    def _skip_indent(self, i):
+        # type: (int) -> int
+        """Ведущие пробелы строки (отступ кода и вложенных списков) видны, но
+        не печатаются: позиция внутри отступа проматывается к первой букве."""
+        line_start = self.text.rfind("\n", 0, i) + 1
+        j = line_start
+        while j < len(self.text) and self.text[j] == " ":
+            j += 1
+        return j if i <= j else i
+
     def _load_chapter(self):
         # type: () -> None
         self.text = self.book.chapters[self.chapter_idx].text
-        self.offset = min(self.offset, len(self.text))
+        self.offset = self._skip_indent(min(self.offset, len(self.text)))
         self.tail.clear()
         self._missed = False
-        # границы предложений и абзацев (индексы начал)
+        # границы предложений и абзацев (индексы начал, отступ уже промотан —
+        # иначе prev_paragraph залипал бы: прыжок на начало строки → скип → там же)
         starts = {0}
         for m in _SENTENCE_END.finditer(self.text):
             starts.add(m.end())
         for i, ch in enumerate(self.text):
             if ch == "\n":
                 starts.add(i + 1)
-        self.sentence_starts = sorted(starts)
-        self.paragraph_starts = [0] + [i + 1 for i, c in enumerate(self.text)
-                                       if c == "\n"]
+        self.sentence_starts = sorted({self._skip_indent(s) for s in starts})
+        self.paragraph_starts = sorted(
+            {self._skip_indent(i + 1) for i, c in enumerate(self.text)
+             if c == "\n"} | {self._skip_indent(0)})
 
     @property
     def chapter(self):
@@ -181,6 +193,8 @@ class Engine:
             return Result.BLOCKED
         if not self.tail and ch == expected:
             self.offset += 1
+            if ch == "\n":  # новая строка — отступ проматываем, не печатаем
+                self.offset = self._skip_indent(self.offset)
             self._missed = False
             self.stats.hit()
             return Result.DONE if self.chapter_done else Result.OK
@@ -208,7 +222,7 @@ class Engine:
 
     def _goto(self, offset):
         # type: (int) -> None
-        self.offset = max(0, min(offset, len(self.text)))
+        self.offset = self._skip_indent(max(0, min(offset, len(self.text))))
         self.tail.clear()
         self._missed = False
 

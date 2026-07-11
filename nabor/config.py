@@ -23,6 +23,9 @@ DEFAULT_SKIP_PARAGRAPHS = [
     r"заходите к нам на https?://",
 ]
 
+# папки/файлы Obsidian-хранилища, которые не годятся в упражнение
+DEFAULT_VAULT_EXCLUDE = ["Templates", "Dashboards"]
+
 DEFAULTS = {
     "library_dir": str(ROOT / "library"),
     "lines_before": 2,        # строк набранного текста над курсорной строкой
@@ -32,6 +35,10 @@ DEFAULTS = {
     "cursor": "line",         # "line" (подчёркивание) или "block"
     "skip_epigraphs": False,  # эпиграфы fb2 печатаются (в HPMOR это шутки автора)
     "skip_paragraphs": DEFAULT_SKIP_PARAGRAPHS,  # regex издательских врезок
+    "vault_dir": "",          # Obsidian-хранилище; пусто = режим заметок выключен
+    "vault_exclude": DEFAULT_VAULT_EXCLUDE,  # верхние папки/файлы вне пула
+    "note_min_chars": 300,    # короче — не упражнение, тянем следующую заметку
+    "markdown": "rendered",   # "rendered" (разметка снята) или "raw" (исходник)
 }
 
 # ключи, которые правит диалог настроек в UI (уходят в settings.json)

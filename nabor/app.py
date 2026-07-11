@@ -17,7 +17,7 @@ from textual.widgets import Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from nabor import storage, theme
-from nabor.book import load_book
+from nabor.book import load_book, random_note
 from nabor.config import DEFAULTS, UI_KEYS, save_ui_settings
 from nabor.engine import Engine, Result
 
@@ -195,6 +195,7 @@ class TypingScreen(Screen):
         Binding("pagedown", "next_chapter", "глава", key_display="⇟"),
         Binding("ctrl+b", "app.shelf", "Полка"),
         Binding("ctrl+s", "app.stats", "Статистика"),
+        Binding("ctrl+n", "app.random_note", "Заметка"),
     ]
 
     def compose(self):
@@ -257,13 +258,19 @@ class TypingScreen(Screen):
     def _type(self, ch):
         # type: (str) -> None
         result = self.app.engine.type_char(ch)
-        if result == Result.DONE:
-            if self.app.engine.book_done:
-                self.notify("Книга закончена! 🎉", timeout=10)
-                self.app.save_position()
-            else:
-                self.app.engine.next_chapter()
-                self.app.save_position()
+        if result != Result.DONE:
+            return
+        if self.app.note_mode:
+            st = self.app.engine.stats
+            self.notify(f"Заметка набрана! {st.chars} знаков · "
+                        f"{st.wpm * 5:.0f} зн/мин · точность {st.accuracy:.0f}%"
+                        f" · Ctrl+N — следующая", timeout=15)
+        elif self.app.engine.book_done:
+            self.notify("Книга закончена! 🎉", timeout=10)
+            self.app.save_position()
+        else:
+            self.app.engine.next_chapter()
+            self.app.save_position()
 
     # --- навигация ---
 
@@ -349,13 +356,18 @@ class ShelfScreen(Screen):
 class MenuScreen(ModalScreen):
     BINDINGS = [Binding("escape", "close", "Продолжить")]
 
-    ITEMS = [
-        ("continue", "Продолжить"),
-        ("settings", "Настройки"),
-        ("stats", "Статистика"),
-        ("shelf", "Библиотека"),
-        ("quit", "Выйти"),
-    ]
+    def items(self):
+        # type: () -> list[tuple[str, str]]
+        app = self.app
+        items = [("continue", "Продолжить")]
+        if app.cfg["vault_dir"]:
+            items.append(("note", "Следующая заметка" if app.note_mode
+                          else "Случайная заметка"))
+        if app.note_mode and app.last_book_path is not None:
+            items.append(("book", f'Вернуться к книге "{app.last_book_title}"'))
+        items += [("settings", "Настройки"), ("stats", "Статистика"),
+                  ("shelf", "Библиотека"), ("quit", "Выйти")]
+        return items
 
     def compose(self):
         # type: () -> ComposeResult
@@ -363,7 +375,7 @@ class MenuScreen(ModalScreen):
             yield Static(Text("nabor", style=f"bold {theme.YELLOW}",
                               justify="center"), id="menu-title")
             yield OptionList(*[Option(label, id=key)
-                               for key, label in self.ITEMS])
+                               for key, label in self.items()])
 
     def on_mount(self):
         # type: () -> None
@@ -373,7 +385,11 @@ class MenuScreen(ModalScreen):
         # type: (object) -> None
         self.dismiss()
         action = event.option.id
-        if action == "settings":
+        if action == "note":
+            self.app.open_note()
+        elif action == "book":
+            self.app.open_book(self.app.last_book_path)
+        elif action == "settings":
             self.app.push_screen(SettingsScreen())
         elif action == "stats":
             self.app.push_screen(StatsScreen())
@@ -744,13 +760,17 @@ class NaborApp(App):
     }}
     """
 
-    def __init__(self, cfg, book_path=None):
-        # type: (dict, Path | None) -> None
+    def __init__(self, cfg, book_path=None, note=False):
+        # type: (dict, Path | None, bool) -> None
         super().__init__()
         self.cfg = cfg
         self._start_path = book_path
+        self._start_note = note
         self.book = None
         self.engine = None  # type: Engine | None
+        self.note_mode = False       # заметка — разовое упражнение без прогресса
+        self.last_book_path = None   # type: Path | None  # куда вернуться из заметки
+        self.last_book_title = ""
 
     def library_books(self):
         # type: () -> list[Path]
@@ -762,6 +782,10 @@ class NaborApp(App):
 
     def on_mount(self):
         # type: () -> None
+        self.set_interval(30.0, self.save_position)
+        if self._start_note:
+            self.open_note()
+            return
         path = self._start_path
         if path is None:
             last = storage.last_opened_book()
@@ -772,28 +796,59 @@ class NaborApp(App):
             self.open_book(path)
         else:
             self.push_screen(ShelfScreen())
-        self.set_interval(30.0, self.save_position)
 
-    def open_book(self, path):
-        # type: (Path) -> None
-        self.finish_session()
-        self.book = load_book(path, self.cfg["normalize"],
-                              self.cfg["skip_epigraphs"],
-                              tuple(self.cfg["skip_paragraphs"]))
-        chapter, offset, hash_ok = storage.get_position(self.book)
-        self.engine = Engine(self.book, chapter, offset,
+    def _start_typing(self, book, chapter=0, offset=0):
+        # type: (object, int, int) -> None
+        self.book = book
+        self.engine = Engine(book, chapter, offset,
                              error_tail_max=self.cfg["error_tail_max"],
                              idle_timeout=self.cfg["idle_timeout"])
         while len(self.screen_stack) > 1:
             self.pop_screen()
         self.push_screen(TypingScreen())
+
+    def open_book(self, path):
+        # type: (Path) -> None
+        self.finish_session()
+        book = load_book(path, self.cfg["normalize"],
+                         self.cfg["skip_epigraphs"],
+                         tuple(self.cfg["skip_paragraphs"]),
+                         self.cfg["markdown"])
+        chapter, offset, hash_ok = storage.get_position(book)
+        self.note_mode = False
+        self.last_book_path = path
+        self.last_book_title = book.title
+        self._start_typing(book, chapter, offset)
         if not hash_ok:
             self.notify("Текст книги изменился — позиция сброшена "
                         "на начало главы", severity="warning", timeout=8)
 
+    def open_note(self):
+        # type: () -> None
+        """Случайная заметка из Obsidian-хранилища: разовое упражнение —
+        прогресс не пишется, на полку не попадает."""
+        vault = self.cfg["vault_dir"]
+        if not vault:
+            self.notify("Хранилище не задано — укажи vault_dir в config.toml",
+                        severity="warning", timeout=8)
+            return
+        besides = self.book.path if self.note_mode and self.book else None
+        try:
+            book = random_note(vault, tuple(self.cfg["vault_exclude"]),
+                               self.cfg["note_min_chars"], self.cfg["normalize"],
+                               self.cfg["markdown"],
+                               tuple(self.cfg["skip_paragraphs"]), besides)
+        except (ValueError, OSError) as exc:
+            self.notify(f"Заметку не открыть: {exc}", severity="error",
+                        timeout=8)
+            return
+        self.finish_session()  # книжную позицию сохранит, заметочную — нет
+        self.note_mode = True
+        self._start_typing(book)
+
     def save_position(self):
         # type: () -> None
-        if self.engine is not None:
+        if self.engine is not None and not self.note_mode:
             storage.save_position(self.book, self.engine.chapter_idx,
                                   self.engine.offset, self.engine.percent)
 
@@ -821,6 +876,10 @@ class NaborApp(App):
         if not isinstance(self.screen, StatsScreen):
             self._pause_timer()
             self.push_screen(StatsScreen())
+
+    def action_random_note(self):
+        # type: () -> None
+        self.open_note()
 
     def action_search(self):
         # type: () -> None
