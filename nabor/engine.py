@@ -30,6 +30,12 @@ class Stats:
         self.char_errors = Counter()  # type: Counter[str]  # ожидаемый символ → промахи
         self._recent = deque()  # type: deque[float]  # времена верных символов (для живого WPM)
 
+    def pause(self):
+        # type: () -> None
+        """Явная пауза (открыта модалка/меню): время до следующего
+        нажатия не будет засчитано, каким бы коротким оно ни было."""
+        self._last_event = None
+
     def _tick(self):
         # type: () -> float
         now = self._clock()

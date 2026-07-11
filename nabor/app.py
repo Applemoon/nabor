@@ -13,12 +13,12 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Footer, Input, OptionList, Static
+from textual.widgets import Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from nabor import storage, theme
 from nabor.book import load_book
-from nabor.config import save_ui_settings
+from nabor.config import DEFAULTS, UI_KEYS, save_ui_settings
 from nabor.engine import Engine, Result
 
 BOOK_GLOBS = ("*.fb2", "*.fb2.zip", "*.zip", "*.txt")
@@ -45,14 +45,46 @@ def wrap_offsets(text, width):
     return lines
 
 
+class WrapFooter(Static):
+    """Футер с хоткеями текущего экрана; не влезает в ширину — переносит
+    блоки на следующие строки (стандартный Footer просто режется)."""
+
+    KEY_LABELS = {"escape": "esc", "enter": "enter"}
+
+    def render(self):
+        parts = []
+        for b in self.screen.BINDINGS:
+            if isinstance(b, Binding) and b.show and b.description:
+                key = b.key_display or \
+                    self.KEY_LABELS.get(b.key, b.key.replace("ctrl+", "^"))
+                parts.append((key, b.description))
+        width = max(10, self.size.width - 2)
+        out = Text(no_wrap=False, end="")
+        col = 0
+        for i, (key, label) in enumerate(parts):
+            chunk = len(key) + 1 + len(label) + (2 if col else 0)
+            if col and col + chunk > width:
+                out.append("\n")
+                col = 0
+                chunk -= 2
+            elif col:
+                out.append("  ")
+            out.append(key, f"bold {theme.ORANGE}")
+            out.append(" " + label, theme.GRAY)
+            col += chunk
+        return out
+
+
 class TypingArea(Static):
-    """Окно текста: window_lines строк, строка с курсором по центру."""
+    """Окно текста: lines_before строк набранного сверху, курсорная строка,
+    lines_after строк снизу."""
 
     engine = None  # type: Engine | None
 
-    def __init__(self, window_lines, cursor_style):
+    def __init__(self, lines_before, lines_after, cursor_style):
         super().__init__()
-        self.window_lines = window_lines
+        self.lines_before = lines_before
+        self.lines_after = lines_after
         self.cursor_style = cursor_style
         self._cache_key = None
         self._lines = []  # type: list[tuple[int, int]]
@@ -80,10 +112,10 @@ class TypingArea(Static):
                 cur_line = i
                 break
 
-        half = self.window_lines // 2
+        first = cur_line - self.lines_before
         out = Text(no_wrap=True, end="")
-        for i in range(cur_line - half, cur_line - half + self.window_lines):
-            if i != cur_line - half:
+        for i in range(first, cur_line + self.lines_after + 1):
+            if i != first:
                 out.append("\n")
             if not 0 <= i < len(lines):
                 continue
@@ -108,18 +140,28 @@ class TypingArea(Static):
 
 
 class BookProgress(Static):
-    """Полноширинный прогресс-бар книги."""
+    """Полноширинный прогресс-бар книги: │━━━╌ 12.34% ╌╌╌╌│."""
 
     engine = None  # type: Engine | None
 
     def render(self):
         if self.engine is None:
             return ""
-        width = max(10, self.size.width)
-        filled = round(width * self.engine.percent / 100)
+        pct = self.engine.percent
+        width = max(20, self.size.width) - 2  # каёмки по краям
+        label = f" {pct:.2f}% "
+        start = (width - len(label)) // 2
+        filled = round(width * pct / 100)
         out = Text(no_wrap=True, end="")
-        out.append("━" * filled, theme.ORANGE)
-        out.append("━" * (width - filled), theme.BG2)
+        out.append("│", theme.DIM)
+        for i in range(width):
+            if start <= i < start + len(label):
+                out.append(label[i - start], f"bold {theme.FG}")
+            elif i < filled:
+                out.append("━", theme.ORANGE)
+            else:
+                out.append("╌", theme.DIM)
+        out.append("│", theme.DIM)
         return out
 
 
@@ -132,8 +174,7 @@ class StatusBar(Horizontal):
     def update_status(self, engine, book):
         # type: (Engine, object) -> None
         n = len(book.chapters)
-        left = (f" {book.title} · Гл. {engine.chapter_idx + 1}/{n}"
-                f" · {engine.percent:.1f}%")
+        left = f" {book.title} · Гл. {engine.chapter_idx + 1}/{n}"
         s = engine.stats
         right = (f"{s.cpm_now:.0f} зн/мин · {s.wpm_now:.0f} wpm"
                  f" · {s.accuracy:.0f}% ")
@@ -161,10 +202,11 @@ class TypingScreen(Screen):
         yield Static(id="banner")
         cursor = theme.CURSOR_BLOCK if self.app.cfg["cursor"] == "block" \
             else theme.CURSOR_LINE
-        yield TypingArea(self.app.cfg["window_lines"], cursor)
+        yield TypingArea(self.app.cfg["lines_before"],
+                         self.app.cfg["lines_after"], cursor)
         yield BookProgress(id="book-progress")
         yield StatusBar(id="status")
-        yield Footer()
+        yield WrapFooter()
 
     def on_mount(self):
         # type: () -> None
@@ -180,7 +222,8 @@ class TypingScreen(Screen):
             return
         cfg = self.app.cfg
         area = self.query_one(TypingArea)
-        area.window_lines = cfg["window_lines"]
+        area.lines_before = cfg["lines_before"]
+        area.lines_after = cfg["lines_after"]
         area.cursor_style = theme.CURSOR_BLOCK if cfg["cursor"] == "block" \
             else theme.CURSOR_LINE
         e = self.app.engine
@@ -190,6 +233,7 @@ class TypingScreen(Screen):
 
     def action_menu(self):
         # type: () -> None
+        self.app.engine.stats.pause()
         self.app.push_screen(MenuScreen())
 
     # --- ввод ---
@@ -255,14 +299,21 @@ class TypingScreen(Screen):
 
 
 class ShelfScreen(Screen):
-    BINDINGS = [Binding("escape", "back", "Назад")]
+    BINDINGS = [Binding("enter", "open", "Открыть книгу"),
+                Binding("escape", "back", "Назад")]
 
     def compose(self):
         # type: () -> ComposeResult
-        yield Static(Text("Полка", style=f"bold {theme.YELLOW}",
+        yield Static(Text("Библиотека", style=f"bold {theme.YELLOW}",
                           justify="center"), id="banner")
         yield OptionList(id="shelf")
-        yield Footer()
+        yield WrapFooter()
+
+    def action_open(self):
+        # type: () -> None
+        ol = self.query_one(OptionList)
+        if ol.option_count:
+            ol.action_select()
 
     def on_mount(self):
         # type: () -> None
@@ -281,6 +332,7 @@ class ShelfScreen(Screen):
             opened = entry.get("last_opened", "")[:10] or "—"
             label = f"{path.stem}  ·  {pct}%  ·  {opened}"
             ol.add_option(Option(label, id=str(path)))
+        ol.highlighted = 0  # первый пункт сразу готов к Enter
 
     def on_option_list_option_selected(self, event):
         # type: (object) -> None
@@ -313,6 +365,10 @@ class MenuScreen(ModalScreen):
             yield OptionList(*[Option(label, id=key)
                                for key, label in self.ITEMS])
 
+    def on_mount(self):
+        # type: () -> None
+        self.query_one(OptionList).highlighted = 0
+
     def on_option_list_option_selected(self, event):
         # type: (object) -> None
         self.dismiss()
@@ -332,59 +388,62 @@ class MenuScreen(ModalScreen):
 
 
 class SettingsScreen(Screen):
-    BINDINGS = [Binding("escape", "back", "Назад")]
+    BINDINGS = [Binding("escape", "back", "Назад"),
+                Binding("ctrl+r", "reset", "Сбросить дефолты")]
 
-    FIELDS = [
-        ("cursor", "Курсор", ["line", "block"]),
-        ("error_tail_max", "Хвост ошибок (0 = блокировка)",
-         list(range(0, 9))),
-        ("window_lines", "Строк текста", list(range(1, 10))),
-        ("idle_timeout", "Автопауза, сек", [3.0, 5.0, 10.0, 15.0]),
+    NUM_FIELDS = [
+        ("error_tail_max", "Хвост ошибок (0 — ни шагу с ошибкой)", 0, 8),
+        ("lines_before", "Строк набранного текста сверху", 0, 8),
+        ("lines_after", "Строк будущего текста снизу", 0, 8),
+        ("idle_timeout", "Стоп таймера при простое, сек", 1, 60),
     ]
-    LABELS = {"line": "линия", "block": "блок"}
 
     def compose(self):
         # type: () -> ComposeResult
         yield Static(Text("Настройки", style=f"bold {theme.YELLOW}",
                           justify="center"), id="banner")
-        yield OptionList(id="settings-list")
-        yield Static(Text("Enter — переключить значение · сохраняется в "
+        with Vertical(id="settings-form"):
+            with Horizontal(classes="settings-row"):
+                yield Label("Курсор")
+                yield Select([("линия", "line"), ("блок", "block")],
+                             value=self.app.cfg["cursor"],
+                             allow_blank=False, id="set-cursor")
+            for key, label, _, _ in self.NUM_FIELDS:
+                with Horizontal(classes="settings-row"):
+                    yield Label(label)
+                    yield Input(value=f"{self.app.cfg[key]:g}",
+                                type="integer", id=f"set-{key}")
+        yield Static(Text("числа печатаются как есть · сохраняется в "
                           "settings.json (config.toml не трогается)",
-                          style=theme.DIM, justify="center"), id="settings-hint")
-        yield Footer()
+                          style=theme.DIM, justify="center"),
+                     id="settings-hint")
+        yield WrapFooter()
 
-    def on_mount(self):
-        # type: () -> None
-        self._rebuild(0)
-
-    def _rebuild(self, highlight):
-        # type: (int) -> None
-        ol = self.query_one("#settings-list", OptionList)
-        ol.clear_options()
-        for key, label, _ in self.FIELDS:
-            val = self.app.cfg[key]
-            shown = self.LABELS.get(val, val)
-            if isinstance(shown, float):
-                shown = f"{shown:g}"
-            ol.add_option(Option(
-                Text.assemble((f"{label:<32}", theme.FG),
-                              ("◂ ", theme.DIM),
-                              (f"{shown}", f"bold {theme.ORANGE}"),
-                              (" ▸", theme.DIM)), id=key))
-        ol.highlighted = highlight
-        ol.focus()
-
-    def on_option_list_option_selected(self, event):
+    def on_select_changed(self, event):
         # type: (object) -> None
-        idx = event.option_index
-        key, _, values = self.FIELDS[idx]
-        try:
-            i = values.index(self.app.cfg[key])
-        except ValueError:
-            i = -1
-        self.app.cfg[key] = values[(i + 1) % len(values)]
+        self.app.cfg["cursor"] = event.value
         save_ui_settings(self.app.cfg)
-        self._rebuild(idx)
+
+    def on_input_changed(self, event):
+        # type: (object) -> None
+        key = event.input.id.removeprefix("set-")
+        field = next(f for f in self.NUM_FIELDS if f[0] == key)
+        try:
+            val = int(event.value)
+        except ValueError:
+            return  # пустое/недопечатанное — не применяем
+        val = max(field[2], min(val, field[3]))
+        self.app.cfg[key] = float(val) if key == "idle_timeout" else val
+        save_ui_settings(self.app.cfg)
+
+    def action_reset(self):
+        # type: () -> None
+        for key in UI_KEYS:
+            self.app.cfg[key] = DEFAULTS[key]
+        save_ui_settings(self.app.cfg)
+        self.query_one("#set-cursor", Select).value = DEFAULTS["cursor"]
+        for key, _, _, _ in self.NUM_FIELDS:
+            self.query_one(f"#set-{key}", Input).value = f"{DEFAULTS[key]:g}"
 
     def action_back(self):
         # type: () -> None
@@ -400,6 +459,21 @@ class SearchScreen(ModalScreen):
         with Vertical(id="search-panel"):
             yield Input(placeholder="Поиск по книге…", id="search-input")
             yield OptionList(id="search-results")
+            yield Static(Text("↑↓ выбор · Enter — перейти · Esc — закрыть",
+                              style=theme.DIM, justify="center"))
+
+    def on_key(self, event):
+        # type: (object) -> None
+        """Стрелки листают результаты, не покидая поля ввода."""
+        if event.key not in ("up", "down"):
+            return
+        ol = self.query_one("#search-results", OptionList)
+        if ol.option_count:
+            cur = ol.highlighted or 0
+            step = 1 if event.key == "down" else -1
+            ol.highlighted = max(0, min(cur + step, ol.option_count - 1))
+        event.stop()
+        event.prevent_default()
 
     def on_input_changed(self, event):
         # type: (object) -> None
@@ -425,12 +499,14 @@ class SearchScreen(ModalScreen):
                 pos = low.find(q, pos + len(q))
             if count >= self.MAX_RESULTS:
                 break
+        if ol.option_count:
+            ol.highlighted = 0  # новый ввод — выбор снова на первом
 
     def on_input_submitted(self, event):
         # type: (object) -> None
         ol = self.query_one("#search-results", OptionList)
         if ol.option_count:
-            self._jump(ol.get_option_at_index(0).id)
+            self._jump(ol.get_option_at_index(ol.highlighted or 0).id)
 
     def on_option_list_option_selected(self, event):
         # type: (object) -> None
@@ -457,7 +533,7 @@ class StatsScreen(Screen):
                           justify="center"), id="banner")
         with VerticalScroll(id="stats-scroll"):
             yield Static(id="stats-body")
-        yield Footer()
+        yield WrapFooter()
 
     def on_mount(self):
         # type: () -> None
@@ -569,6 +645,12 @@ class NaborApp(App):
     Input {{
         background: {theme.BG1};
     }}
+    Input:focus {{
+        border: tall {theme.ORANGE};
+    }}
+    Select:focus > SelectCurrent {{
+        border: tall {theme.ORANGE};
+    }}
     Input > .input--cursor {{
         background: {theme.ORANGE};
         color: {theme.BG};
@@ -608,12 +690,32 @@ class NaborApp(App):
         height: auto;
         max-height: 14;
     }}
-    #settings-list {{
+    #settings-form {{
         height: 1fr;
-        margin: 1 4;
+        margin: 1 6;
+    }}
+    .settings-row {{
+        height: 3;
+        margin-bottom: 1;
+    }}
+    .settings-row Label {{
+        width: 42;
+        padding: 1 0;
+        color: {theme.FG};
+    }}
+    .settings-row Input {{
+        width: 12;
+    }}
+    .settings-row Select {{
+        width: 16;
     }}
     #settings-hint {{
         height: 1;
+    }}
+    WrapFooter {{
+        height: auto;
+        background: {theme.BG1};
+        padding: 0 1;
     }}
     #status-left {{ width: 1fr; }}
     #status-right {{ width: auto; }}
@@ -686,20 +788,28 @@ class NaborApp(App):
                 self.engine.stats.session_record(self.book.title))
             self.engine = None
 
+    def _pause_timer(self):
+        # type: () -> None
+        if self.engine is not None:
+            self.engine.stats.pause()
+
     def action_shelf(self):
         # type: () -> None
         if not isinstance(self.screen, ShelfScreen):
+            self._pause_timer()
             self.push_screen(ShelfScreen())
 
     def action_stats(self):
         # type: () -> None
         if not isinstance(self.screen, StatsScreen):
+            self._pause_timer()
             self.push_screen(StatsScreen())
 
     def action_search(self):
         # type: () -> None
         if self.engine is not None and not isinstance(self.screen,
                                                       SearchScreen):
+            self._pause_timer()
             self.push_screen(SearchScreen())
 
     def quit_app(self):
