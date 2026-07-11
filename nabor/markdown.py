@@ -36,6 +36,7 @@ _MDLINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _FOOTNOTE = re.compile(r"\[\^[^\]]+\]")
 _BARE_URL = re.compile(r"<?\b(?:https?|obsidian)://\S+>?")
 _INLINE_CODE = re.compile(r"`([^`]+)`")
+_STASHED = re.compile(r"\x00(\d+)\x00")  # inline code parked during stripping
 _INLINE_MATH = re.compile(r"\$[^$\n]+\$")
 _HTML = re.compile(r"</?[a-zA-Z][^>]*>")
 _SPACE_BEFORE_PUNCT = re.compile(r"\s+([,.;:!?)])")
@@ -76,11 +77,22 @@ def _strip_markup(text):
     text = _FOOTNOTE.sub("", text)
     text = _BARE_URL.sub("", text)
     text = _INLINE_MATH.sub("", text)
-    text = _INLINE_CODE.sub(r"\1", text)  # before emphasis: `foo_bar` is no italic
+    # inline code goes behind a placeholder: its backticks are not typed, but
+    # what is inside them is not markup either — Obsidian shows `__init__` and
+    # `<div>` as they are, so emphasis and HTML must not touch them
+    code = []  # type: list[str]
+
+    def stash(m):
+        code.append(m.group(1))
+        return f"\x00{len(code) - 1}\x00"
+
+    text = _INLINE_CODE.sub(stash, text)
     for pattern, repl in _EMPHASIS:
         text = pattern.sub(repl, text)
     text = text.replace("`", "")  # orphaned backticks (an emoji lived inside)
     text = _HTML.sub("", text)
+    if code:
+        text = _STASHED.sub(lambda m: code[int(m.group(1))], text)
     # whatever was dropped (emoji, links) leaves a hole: "a task with , while"
     return _SPACE_BEFORE_PUNCT.sub(r"\1", text)
 
