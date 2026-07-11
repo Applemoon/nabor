@@ -36,6 +36,12 @@ class Stats:
         нажатия не будет засчитано, каким бы коротким оно ни было."""
         self._last_event = None
 
+    def touch(self):
+        # type: () -> None
+        """Нажатие, которое не идёт ни в верные, ни в ошибки (повторный
+        промах по тому же символу), но время набора продолжает идти."""
+        self._tick()
+
     def _tick(self):
         # type: () -> float
         now = self._clock()
@@ -114,6 +120,7 @@ class Engine:
         self.chapter_idx = min(chapter, len(book.chapters) - 1)
         self.offset = offset
         self.tail = []  # type: list[str]  # ошибочно набранные символы
+        self._missed = False  # промах по текущему символу уже засчитан
         self.error_tail_max = error_tail_max
         self.stats = Stats(idle_timeout, clock)
         self._chapter_lens = [len(c.text) + 1 for c in book.chapters]
@@ -127,6 +134,7 @@ class Engine:
         self.text = self.book.chapters[self.chapter_idx].text
         self.offset = min(self.offset, len(self.text))
         self.tail.clear()
+        self._missed = False
         # границы предложений и абзацев (индексы начал)
         starts = {0}
         for m in _SENTENCE_END.finditer(self.text):
@@ -173,9 +181,16 @@ class Engine:
             return Result.BLOCKED
         if not self.tail and ch == expected:
             self.offset += 1
+            self._missed = False
             self.stats.hit()
             return Result.DONE if self.chapter_done else Result.OK
-        self.stats.miss(expected)
+        # затык по символу = одна ошибка, сколько бы неверных клавиш
+        # ни было нажато, пока символ не набран верно
+        if self._missed:
+            self.stats.touch()
+        else:
+            self.stats.miss(expected)
+            self._missed = True
         if len(self.tail) >= self.error_tail_max:
             return Result.BLOCKED  # хвост полон (или отключён нулём)
         self.tail.append(ch)
@@ -195,6 +210,7 @@ class Engine:
         # type: (int) -> None
         self.offset = max(0, min(offset, len(self.text)))
         self.tail.clear()
+        self._missed = False
 
     def next_sentence(self):
         # type: () -> None
