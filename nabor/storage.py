@@ -1,4 +1,4 @@
-"""progress.json (позиции по книгам) и stats.jsonl (журнал сессий,
+"""progress.json (per-book positions) and stats.jsonl (session log,
 append-only)."""
 
 import json
@@ -34,8 +34,8 @@ def save_position(book, chapter, offset, percent=0.0):
 
 def get_position(book):
     # type: (object) -> tuple[int, int, bool]
-    """(chapter, offset, hash_ok). При несовпадении хэша текста —
-    позиция в начало сохранённой главы, hash_ok=False (не молча)."""
+    """(chapter, offset, hash_ok). A text hash mismatch means the book changed:
+    jump to the start of the saved chapter and say so, never silently."""
     entry = load_progress().get(book.path.name)
     if entry is None:
         return 0, 0, True
@@ -46,7 +46,7 @@ def get_position(book):
 
 def last_opened_book():
     # type: () -> str | None
-    """Имя файла книги с самым свежим заходом (для авторезюма)."""
+    """File name of the most recently opened book (for auto-resume)."""
     progress = load_progress()
     if not progress:
         return None
@@ -74,8 +74,8 @@ def append_session(record):
 
 def clear_char_errors():
     # type: () -> int
-    """Забыть промахи по символам во всех сессиях; скорость, время и
-    точность остаются. Возвращает, сколько промахов стёрли."""
+    """Forget per-character misses across all sessions; speed, time and
+    accuracy stay. Returns how many misses were wiped."""
     sessions = read_sessions()
     wiped = sum(sum(s.get("char_errors", {}).values()) for s in sessions)
     if not wiped:
@@ -85,5 +85,5 @@ def clear_char_errors():
     tmp = STATS_PATH.with_suffix(STATS_PATH.suffix + ".tmp")
     tmp.write_text("".join(json.dumps(s, ensure_ascii=False) + "\n"
                            for s in sessions), encoding="utf-8")
-    tmp.replace(STATS_PATH)  # атомарно: журнал не порвётся на полуслове
+    tmp.replace(STATS_PATH)  # atomic: the log never tears mid-line
     return wiped

@@ -1,41 +1,41 @@
-# Конфиг nabor. Скопируй в config.toml и правь; приложение файл только
-# читает (никогда не перезаписывает). Все ключи опциональны — ниже дефолты.
-# Диалог настроек в UI пишет свои значения в settings.json — они
-# перекрывают config.toml.
+# nabor config. Copy to config.toml and edit; the app only ever reads this
+# file, it never writes to it. Every key is optional — the defaults are below.
+# The in-app settings dialog writes its own values to settings.json, and those
+# override config.toml.
 
+# language = "en"       # UI language: "en" or "ru"
 # library_dir = "./library"
-# lines_before = 2      # строк набранного текста над курсорной строкой
-# lines_after = 2       # строк будущего текста под курсорной строкой
-# error_tail_max = 4    # хвост ошибок; 0 = ни шагу с ошибкой
-# idle_timeout = 5.0    # стоп таймера скорости после стольких секунд простоя
-# cursor = "line"       # "line" (подчёркивание) или "block"
-# skip_epigraphs = false  # true — не печатать эпиграфы fb2. В HPMOR эпиграф —
-#                         # шутка автора («#include "стандартныйотказотправ.h"»),
-#                         # так что по умолчанию печатаем.
+# lines_before = 2      # lines of typed text above the cursor line
+# lines_after = 2       # lines of upcoming text below the cursor line
+# error_tail_max = 4    # error tail; 0 = not a step forward with a mistake
+# idle_timeout = 5.0    # the speed timer stops after this many idle seconds
+# cursor = "line"       # "line" (underline) or "block"
+# skip_epigraphs = false  # true — do not type fb2 epigraphs. In HPMOR an
+#                         # epigraph is a joke by the author, so by default
+#                         # they are typed.
 
-# Obsidian-хранилище: «Случайная заметка» в меню (Ctrl+N, `nabor --note`).
-# Заметка — разовое упражнение: прогресс не пишется, на полку не попадает.
-# Пустой vault_dir (дефолт) — режим выключен, пункт меню не показывается.
+# Obsidian vault: the "Random note" menu entry (Ctrl+N, `nabor --note`).
+# A note is a one-off exercise: no progress is saved, it never hits the shelf.
+# An empty vault_dir (the default) turns the mode off and hides the menu entry.
 # vault_dir = "~/Documents/My vault"
-# vault_exclude = ["Templates", "Dashboards"]  # верхние папки/файлы вне пула
-# note_min_chars = 300  # заметки короче — не упражнение, тянем следующую
-# markdown = "rendered" # "rendered" — разметка снята (печатаешь то, что видишь
-#                       # в Obsidian); "raw" — печатается исходник с ** и [[ ]].
-#                       # Всегда выкидываются: frontmatter, эмодзи, картинки.
+# vault_exclude = ["Templates", "Dashboards"]  # top-level folders/files to skip
+# note_min_chars = 300  # shorter notes are no exercise — pull the next one
+# markdown = "rendered" # "rendered" — markup stripped (you type what Obsidian
+#                       # shows you); "raw" — the source, with ** and [[ ]].
 
-# Издательские врезки — рекламные абзацы, вшитые в файл при выкладке
-# («Мы рады представить вам электронную версию…», ссылки на литрес).
-# Список regex; задан в конфиге — заменяет встроенный ЦЕЛИКОМ. Абзац
-# выкидывается, если regex нашёлся в нём (без учёта регистра). Глава,
-# от которой ничего не осталось, пропадает целиком.
+# Publisher ads — promo paragraphs baked into the file by whoever put the book
+# online. A list of regexes; set it here and it replaces the built-in list
+# WHOLESALE. A paragraph is dropped if the regex matches anywhere inside it
+# (case-insensitive). A chapter left with nothing disappears entirely. The
+# built-in patterns are Russian because that is where such ads come from.
 # skip_paragraphs = [
 #   "^Мы рады представить вам электронную версию",
 #   "^Опубликовано на .*https?://",
 #   "купив полную легальную версию",
 # ]
 
-# Таблица нормализации: символ книги → что показываем и печатаем.
-# Задана в конфиге — заменяет встроенную ЦЕЛИКОМ (не мержится).
+# Normalization table: book character → what is shown and typed. Set it here
+# and it replaces the built-in table WHOLESALE (no merging).
 # [normalize]
 # "—" = "-"
 # "«" = '"'

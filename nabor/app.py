@@ -1,5 +1,5 @@
-"""Textual-приложение: экран набора (окно строк с курсором по центру),
-статус-бар, футер с хоткеями, полка книг."""
+"""Textual app: the typing screen (a window of lines with the cursor in the
+middle), status bar, hotkey footer, book shelf."""
 
 from collections import Counter
 from datetime import datetime, timedelta
@@ -16,18 +16,19 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
-from nabor import storage, theme
+from nabor import i18n, storage, theme
 from nabor.book import load_book, random_note
 from nabor.config import DEFAULTS, UI_KEYS, save_ui_settings
 from nabor.engine import Engine, Result
+from nabor.i18n import t
 
 BOOK_GLOBS = ("*.fb2", "*.fb2.zip", "*.zip", "*.txt")
 
 
 def wrap_offsets(text, width):
     # type: (str, int) -> list[tuple[int, int]]
-    """Строки как (start, end) в тексте главы; каждый символ (включая
-    пробел на переносе и '\\n') принадлежит ровно одной строке."""
+    """Lines as (start, end) within the chapter text; every character (the
+    space a line wraps on and '\\n' included) belongs to exactly one line."""
     lines = []
     pos = 0
     for para in text.split("\n"):
@@ -36,18 +37,20 @@ def wrap_offsets(text, width):
         while para_end - start > width:
             cut = text.rfind(" ", start, start + width)
             if cut <= start:
-                cut = start + width - 1  # слово длиннее строки — жёсткий разрез
+                cut = start + width - 1  # word longer than the line — hard cut
             lines.append((start, cut + 1))
             start = cut + 1
-        end = para_end + (1 if para_end < len(text) else 0)  # '\n' — в строку
+        end = para_end + (1 if para_end < len(text) else 0)  # '\n' joins the line
         lines.append((start, end))
         pos = para_end + 1
     return lines
 
 
 class WrapFooter(Static):
-    """Футер с хоткеями текущего экрана; не влезает в ширину — переносит
-    блоки на следующие строки (стандартный Footer просто режется)."""
+    """Footer with the current screen's hotkeys. Binding descriptions are i18n
+    keys translated here, at render time — the language is not known yet when
+    the BINDINGS class attributes are built. Too narrow a terminal wraps the
+    blocks onto more lines (the stock Footer just truncates)."""
 
     KEY_LABELS = {"escape": "esc", "enter": "enter"}
 
@@ -57,7 +60,7 @@ class WrapFooter(Static):
             if isinstance(b, Binding) and b.show and b.description:
                 key = b.key_display or \
                     self.KEY_LABELS.get(b.key, b.key.replace("ctrl+", "^"))
-                parts.append((key, b.description))
+                parts.append((key, t(b.description)))
         width = max(10, self.size.width - 2)
         out = Text(no_wrap=False, end="")
         col = 0
@@ -76,8 +79,8 @@ class WrapFooter(Static):
 
 
 class TypingArea(Static):
-    """Окно текста: lines_before строк набранного сверху, курсорная строка,
-    lines_after строк снизу."""
+    """Text window: lines_before typed lines, the cursor line, lines_after
+    upcoming lines."""
 
     engine = None  # type: Engine | None
 
@@ -135,12 +138,12 @@ class TypingArea(Static):
                     style = theme.DIM if ch == "\n" else theme.UNTYPED
                 out.append(shown, style)
             if cursor_pos == len(e.text) and i == len(lines) - 1:
-                out.append(" ", self.cursor_style)  # курсор за последним символом
+                out.append(" ", self.cursor_style)  # cursor past the last char
         return out
 
 
 class BookProgress(Static):
-    """Полноширинный прогресс-бар книги: │━━━╌ 12.34% ╌╌╌╌│."""
+    """Full-width book progress bar: │━━━╌ 12.34% ╌╌╌╌│."""
 
     engine = None  # type: Engine | None
 
@@ -148,7 +151,7 @@ class BookProgress(Static):
         if self.engine is None:
             return ""
         pct = self.engine.percent
-        width = max(20, self.size.width) - 2  # каёмки по краям
+        width = max(20, self.size.width) - 2  # the edges take a cell each
         label = f" {pct:.2f}% "
         start = (width - len(label)) // 2
         filled = round(width * pct / 100)
@@ -174,28 +177,30 @@ class StatusBar(Horizontal):
     def update_status(self, engine, book):
         # type: (Engine, object) -> None
         n = len(book.chapters)
-        left = f" {book.title} · Гл. {engine.chapter_idx + 1}/{n}"
+        left = (f" {book.title} · {t('chapter_short')} "
+                f"{engine.chapter_idx + 1}/{n}")
         s = engine.stats
-        right = (f"{s.cpm_now:.0f} зн/мин · {s.wpm_now:.0f} wpm"
-                 f" · {s.accuracy:.0f}% ")
+        right = t("status_right", cpm=s.cpm_now, wpm=s.wpm_now,
+                  acc=s.accuracy) + " "
         self.query_one("#status-left", Static).update(left)
         self.query_one("#status-right", Static).update(right)
 
 
 class TypingScreen(Screen):
     AUTO_FOCUS = None
+    # descriptions are i18n keys — WrapFooter translates them at render time
     BINDINGS = [
-        Binding("escape", "menu", "Меню"),
-        Binding("ctrl+f", "app.search", "Поиск"),
-        Binding("left", "prev_sentence", "←предл", key_display="←"),
-        Binding("right", "next_sentence", "предл→", key_display="→"),
-        Binding("up", "prev_paragraph", "↑абзац", key_display="↑"),
-        Binding("down", "next_paragraph", "абзац↓", key_display="↓"),
-        Binding("pageup", "prev_chapter", "глава", key_display="⇞"),
-        Binding("pagedown", "next_chapter", "глава", key_display="⇟"),
-        Binding("ctrl+b", "app.shelf", "Полка"),
-        Binding("ctrl+s", "app.stats", "Статистика"),
-        Binding("ctrl+n", "app.random_note", "Заметка"),
+        Binding("escape", "menu", "menu"),
+        Binding("ctrl+f", "app.search", "search"),
+        Binding("left", "prev_sentence", "prev_sentence", key_display="←"),
+        Binding("right", "next_sentence", "next_sentence", key_display="→"),
+        Binding("up", "prev_paragraph", "prev_paragraph", key_display="↑"),
+        Binding("down", "next_paragraph", "next_paragraph", key_display="↓"),
+        Binding("pageup", "prev_chapter", "chapter", key_display="⇞"),
+        Binding("pagedown", "next_chapter", "chapter", key_display="⇟"),
+        Binding("ctrl+b", "app.shelf", "shelf"),
+        Binding("ctrl+s", "app.stats", "stats"),
+        Binding("ctrl+n", "app.random_note", "note"),
     ]
 
     def compose(self):
@@ -218,8 +223,8 @@ class TypingScreen(Screen):
 
     def on_screen_resume(self):
         # type: () -> None
-        """Применить настройки, которые могли поменять в диалоге."""
-        if self.app.engine is None:  # выход через меню: сессия уже закрыта
+        """Apply settings that the dialog may have changed."""
+        if self.app.engine is None:  # quit via the menu: session already closed
             return
         cfg = self.app.cfg
         area = self.query_one(TypingArea)
@@ -230,6 +235,7 @@ class TypingScreen(Screen):
         e = self.app.engine
         e.error_tail_max = cfg["error_tail_max"]
         e.stats.idle_timeout = cfg["idle_timeout"]
+        self.query_one(WrapFooter).refresh()  # language may have changed
         self.refresh_all()
 
     def action_menu(self):
@@ -237,7 +243,7 @@ class TypingScreen(Screen):
         self.app.engine.stats.pause()
         self.app.push_screen(MenuScreen())
 
-    # --- ввод ---
+    # --- input ---
 
     def on_key(self, event):
         # type: (object) -> None
@@ -251,7 +257,7 @@ class TypingScreen(Screen):
         elif event.is_printable and event.character:
             self._type(event.character)
         else:
-            return  # служебные клавиши — в биндинги
+            return  # non-printing keys fall through to the bindings
         event.stop()
         self.refresh_all()
 
@@ -262,17 +268,16 @@ class TypingScreen(Screen):
             return
         if self.app.note_mode:
             st = self.app.engine.stats
-            self.notify(f"Заметка набрана! {st.chars} знаков · "
-                        f"{st.wpm * 5:.0f} зн/мин · точность {st.accuracy:.0f}%"
-                        f" · Ctrl+N — следующая", timeout=15)
+            self.notify(t("note_done", chars=st.chars, cpm=st.wpm * 5,
+                          acc=st.accuracy), timeout=15)
         elif self.app.engine.book_done:
-            self.notify("Книга закончена! 🎉", timeout=10)
+            self.notify(t("book_done"), timeout=10)
             self.app.save_position()
         else:
             self.app.engine.next_chapter()
             self.app.save_position()
 
-    # --- навигация ---
+    # --- navigation ---
 
     def _nav(self, method):
         # type: (str) -> None
@@ -287,7 +292,7 @@ class TypingScreen(Screen):
     def action_prev_chapter(self): self._nav("prev_chapter")
     def action_next_chapter(self): self._nav("next_chapter")
 
-    # --- отрисовка ---
+    # --- rendering ---
 
     def refresh_all(self):
         # type: () -> None
@@ -306,12 +311,12 @@ class TypingScreen(Screen):
 
 
 class ShelfScreen(Screen):
-    BINDINGS = [Binding("enter", "open", "Открыть книгу"),
-                Binding("escape", "back", "Назад")]
+    BINDINGS = [Binding("enter", "open", "open_book"),
+                Binding("escape", "back", "back")]
 
     def compose(self):
         # type: () -> ComposeResult
-        yield Static(Text("Библиотека", style=f"bold {theme.YELLOW}",
+        yield Static(Text(t("library"), style=f"bold {theme.YELLOW}",
                           justify="center"), id="banner")
         yield OptionList(id="shelf")
         yield WrapFooter()
@@ -328,8 +333,7 @@ class ShelfScreen(Screen):
         progress = storage.load_progress()
         books = self.app.library_books()
         if not books:
-            ol.add_option(Option("Библиотека пуста — положи fb2/txt в library/",
-                                 disabled=True))
+            ol.add_option(Option(t("empty_shelf"), disabled=True))
             return
         books.sort(key=lambda p: progress.get(p.name, {}).get("last_opened", ""),
                    reverse=True)
@@ -339,7 +343,7 @@ class ShelfScreen(Screen):
             opened = entry.get("last_opened", "")[:10] or "—"
             label = f"{path.stem}  ·  {pct}%  ·  {opened}"
             ol.add_option(Option(label, id=str(path)))
-        ol.highlighted = 0  # первый пункт сразу готов к Enter
+        ol.highlighted = 0  # first entry is ready for Enter right away
 
     def on_option_list_option_selected(self, event):
         # type: (object) -> None
@@ -354,19 +358,20 @@ class ShelfScreen(Screen):
 
 
 class MenuScreen(ModalScreen):
-    BINDINGS = [Binding("escape", "close", "Продолжить")]
+    BINDINGS = [Binding("escape", "close", "continue")]
 
     def items(self):
         # type: () -> list[tuple[str, str]]
         app = self.app
-        items = [("continue", "Продолжить")]
+        items = [("continue", t("continue"))]
         if app.cfg["vault_dir"]:
-            items.append(("note", "Следующая заметка" if app.note_mode
-                          else "Случайная заметка"))
+            items.append(("note", t("next_note") if app.note_mode
+                          else t("random_note")))
         if app.note_mode and app.last_book_path is not None:
-            items.append(("book", f'Вернуться к книге "{app.last_book_title}"'))
-        items += [("settings", "Настройки"), ("stats", "Статистика"),
-                  ("shelf", "Библиотека"), ("quit", "Выйти")]
+            items.append(("book", t("back_to_book",
+                                    title=app.last_book_title)))
+        items += [("settings", t("settings")), ("stats", t("stats")),
+                  ("shelf", t("library")), ("quit", t("quit"))]
         return items
 
     def compose(self):
@@ -404,9 +409,9 @@ class MenuScreen(ModalScreen):
 
 
 class FormSelect(Select):
-    """Select для формы: стрелки ходят по полям, варианты — только по
-    Enter/Space (дефолтный Select раскрывается и стрелками — в форме это
-    ломает навигацию)."""
+    """Select for a form: arrows move between fields, options open only on
+    Enter/Space (the stock Select also opens on arrows, which breaks form
+    navigation)."""
 
     BINDINGS = [
         Binding("down", "app.focus_next", show=False),
@@ -415,45 +420,57 @@ class FormSelect(Select):
 
 
 class SettingsScreen(Screen):
-    BINDINGS = [Binding("escape", "back", "Назад"),
-                Binding("down", "app.focus_next", "след. поле",
+    BINDINGS = [Binding("escape", "back", "back"),
+                Binding("down", "app.focus_next", "next_field",
                         key_display="↓"),
-                Binding("up", "app.focus_previous", "пред. поле",
+                Binding("up", "app.focus_previous", "prev_field",
                         key_display="↑"),
-                Binding("ctrl+r", "reset", "Сбросить дефолты")]
+                Binding("ctrl+r", "reset", "reset_defaults")]
 
+    # (config key, i18n key of the label, min, max)
     NUM_FIELDS = [
-        ("error_tail_max", "Хвост ошибок (0 — ни шагу с ошибкой)", 0, 8),
-        ("lines_before", "Строк набранного текста сверху", 0, 8),
-        ("lines_after", "Строк будущего текста снизу", 0, 8),
-        ("idle_timeout", "Стоп таймера при простое, сек", 1, 60),
+        ("error_tail_max", "set_error_tail_max", 0, 8),
+        ("lines_before", "set_lines_before", 0, 8),
+        ("lines_after", "set_lines_after", 0, 8),
+        ("idle_timeout", "set_idle_timeout", 1, 60),
     ]
 
     def compose(self):
         # type: () -> ComposeResult
-        yield Static(Text("Настройки", style=f"bold {theme.YELLOW}",
+        yield Static(Text(t("settings"), style=f"bold {theme.YELLOW}",
                           justify="center"), id="banner")
         with Vertical(id="settings-form"):
             with Horizontal(classes="settings-row"):
-                yield Label("Курсор")
-                yield FormSelect([("линия", "line"), ("блок", "block")],
+                yield Label(t("language"))
+                yield FormSelect([("English", "en"), ("Русский", "ru")],
+                                 value=self.app.cfg["language"],
+                                 allow_blank=False, id="set-language")
+            with Horizontal(classes="settings-row"):
+                yield Label(t("cursor"))
+                yield FormSelect([(t("cursor_line"), "line"),
+                                  (t("cursor_block"), "block")],
                                  value=self.app.cfg["cursor"],
                                  allow_blank=False, id="set-cursor")
             for key, label, _, _ in self.NUM_FIELDS:
                 with Horizontal(classes="settings-row"):
-                    yield Label(label)
+                    yield Label(t(label))
                     yield Input(value=f"{self.app.cfg[key]:g}",
                                 type="integer", id=f"set-{key}")
-        yield Static(Text("числа печатаются как есть · сохраняется в "
-                          "settings.json (config.toml не трогается)",
-                          style=theme.DIM, justify="center"),
-                     id="settings-hint")
+        yield Static(Text(t("settings_hint"), style=theme.DIM,
+                          justify="center"), id="settings-hint")
         yield WrapFooter()
 
     def on_select_changed(self, event):
         # type: (object) -> None
-        self.app.cfg["cursor"] = event.value
+        key = event.select.id.removeprefix("set-")
+        if self.app.cfg[key] == event.value:
+            return  # a Select also fires Changed on mount — that is no change
+        self.app.cfg[key] = event.value
         save_ui_settings(self.app.cfg)
+        if key == "language":
+            i18n.set_language(event.value)
+            self.app.pop_screen()  # rebuild the form in the new language
+            self.app.push_screen(SettingsScreen())
 
     def on_input_changed(self, event):
         # type: (object) -> None
@@ -462,7 +479,7 @@ class SettingsScreen(Screen):
         try:
             val = int(event.value)
         except ValueError:
-            return  # пустое/недопечатанное — не применяем
+            return  # empty or half-typed — do not apply
         val = max(field[2], min(val, field[3]))
         self.app.cfg[key] = float(val) if key == "idle_timeout" else val
         save_ui_settings(self.app.cfg)
@@ -472,9 +489,9 @@ class SettingsScreen(Screen):
         for key in UI_KEYS:
             self.app.cfg[key] = DEFAULTS[key]
         save_ui_settings(self.app.cfg)
-        self.query_one("#set-cursor", Select).value = DEFAULTS["cursor"]
-        for key, _, _, _ in self.NUM_FIELDS:
-            self.query_one(f"#set-{key}", Input).value = f"{DEFAULTS[key]:g}"
+        i18n.set_language(DEFAULTS["language"])
+        self.app.pop_screen()
+        self.app.push_screen(SettingsScreen())
 
     def action_back(self):
         # type: () -> None
@@ -482,20 +499,20 @@ class SettingsScreen(Screen):
 
 
 class SearchScreen(ModalScreen):
-    BINDINGS = [Binding("escape", "close", "Закрыть")]
+    BINDINGS = [Binding("escape", "close", "close")]
     MAX_RESULTS = 50
 
     def compose(self):
         # type: () -> ComposeResult
         with Vertical(id="search-panel"):
-            yield Input(placeholder="Поиск по книге…", id="search-input")
+            yield Input(placeholder=t("search_placeholder"), id="search-input")
             yield OptionList(id="search-results")
-            yield Static(Text("↑↓ выбор · Enter — перейти · Esc — закрыть",
-                              style=theme.DIM, justify="center"))
+            yield Static(Text(t("search_hint"), style=theme.DIM,
+                              justify="center"))
 
     def on_key(self, event):
         # type: (object) -> None
-        """Стрелки листают результаты, не покидая поля ввода."""
+        """Arrows walk the results without leaving the input field."""
         if event.key not in ("up", "down"):
             return
         ol = self.query_one("#search-results", OptionList)
@@ -519,7 +536,7 @@ class SearchScreen(ModalScreen):
             pos = low.find(q)
             while pos != -1 and count < self.MAX_RESULTS:
                 snippet = Text.assemble(
-                    (f"Гл. {ci + 1:>3}  ", theme.YELLOW),
+                    (f"{t('chapter_short')} {ci + 1:>3}  ", theme.YELLOW),
                     ("…" + chapter.text[max(0, pos - 25):pos].replace("\n", " "),
                      theme.GRAY),
                     (chapter.text[pos:pos + len(q)], f"bold {theme.ORANGE}"),
@@ -531,7 +548,7 @@ class SearchScreen(ModalScreen):
             if count >= self.MAX_RESULTS:
                 break
         if ol.option_count:
-            ol.highlighted = 0  # новый ввод — выбор снова на первом
+            ol.highlighted = 0  # new query — selection back to the first hit
 
     def on_input_submitted(self, event):
         # type: (object) -> None
@@ -556,23 +573,22 @@ class SearchScreen(ModalScreen):
 
 
 class StatsScreen(Screen):
-    BINDINGS = [Binding("escape", "back", "Назад"),
-                Binding("ctrl+r", "reset_errors", "Сбросить промахи")]
+    BINDINGS = [Binding("escape", "back", "back"),
+                Binding("ctrl+r", "reset_errors", "reset_misses")]
 
     def action_reset_errors(self):
         # type: () -> None
-        """Промахи по символам — единственное, что сбрасывается: скорость,
-        время и точность в журнале остаются."""
+        """Character misses are the only thing reset: speed, time and accuracy
+        stay in the log."""
         wiped = storage.clear_char_errors()
         if self.app.engine is not None:
             self.app.engine.stats.char_errors.clear()
         self.query_one("#stats-body", Static).update(self._build())
-        self.notify(f"Промахи сброшены ({wiped})" if wiped
-                    else "Промахов и так нет")
+        self.notify(t("misses_reset", count=wiped) if wiped else t("no_misses"))
 
     def compose(self):
         # type: () -> ComposeResult
-        yield Static(Text("Статистика", style=f"bold {theme.YELLOW}",
+        yield Static(Text(t("stats"), style=f"bold {theme.YELLOW}",
                           justify="center"), id="banner")
         with VerticalScroll(id="stats-scroll"):
             yield Static(id="stats-body")
@@ -590,7 +606,7 @@ class StatsScreen(Screen):
             if live:
                 sessions.append(live)
         if not sessions:
-            return Text("Пока пусто — напечатай что-нибудь.", style=theme.GRAY)
+            return Text(t("stats_empty"), style=theme.GRAY)
 
         today = datetime.now().strftime("%Y-%m-%d")
         week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -601,18 +617,19 @@ class StatsScreen(Screen):
             errors = sum(s["errors"] for s in sel)
             cpm = chars / (active / 60) if active else 0
             acc = chars / (chars + errors) * 100 if chars + errors else 100
-            return (label, str(len(sel)), f"{active / 60:.0f} мин",
+            return (label, str(len(sel)), t("minutes", n=active / 60),
                     f"{chars}", f"{cpm:.0f}", f"{cpm / 5:.0f}", f"{acc:.0f}%")
 
         totals = Table(box=box.SIMPLE_HEAD, header_style=theme.GRAY,
                        style=theme.FG, pad_edge=False)
-        for col in ("", "сессий", "время", "знаков", "зн/мин", "wpm", "точн."):
+        for col in ("", t("col_sessions"), t("col_time"), t("col_chars"),
+                    t("col_cpm"), t("col_wpm"), t("col_accuracy")):
             totals.add_column(col, justify="right" if col else "left")
-        totals.add_row(*row("Сегодня",
+        totals.add_row(*row(t("row_today"),
                             [s for s in sessions if s["ts"] >= today]))
-        totals.add_row(*row("7 дней",
+        totals.add_row(*row(t("row_week"),
                             [s for s in sessions if s["ts"] >= week_ago]))
-        totals.add_row(*row("Всё время", sessions))
+        totals.add_row(*row(t("row_all"), sessions))
 
         errs = Counter()  # type: Counter[str]
         for s in sessions:
@@ -620,18 +637,19 @@ class StatsScreen(Screen):
         show = {" ": "␣", "\n": "¶"}
         top = "  ".join(f"{show.get(c, c)}×{n}" for c, n in errs.most_common(10))
         errors_line = Text.assemble(
-            ("Промахи по символам:  ", theme.GRAY),
-            (top or "нет", f"bold {theme.RED if top else theme.GREEN}"))
+            (t("char_misses"), theme.GRAY),
+            (top or t("none"), f"bold {theme.RED if top else theme.GREEN}"))
 
         last = Table(box=box.SIMPLE_HEAD, header_style=theme.GRAY,
                      style=theme.FG, pad_edge=False,
-                     title="Последние сессии", title_style=theme.GRAY)
-        for col, j in (("когда", "left"), ("книга", "left"), ("мин", "right"),
-                       ("знаков", "right"), ("зн/мин", "right"),
-                       ("wpm", "right"), ("точн.", "right")):
+                     title=t("recent_sessions"), title_style=theme.GRAY)
+        for col, j in ((t("col_when"), "left"), (t("col_book"), "left"),
+                       (t("col_minutes"), "right"), (t("col_chars"), "right"),
+                       (t("col_cpm"), "right"), (t("col_wpm"), "right"),
+                       (t("col_accuracy"), "right")):
             last.add_column(col, justify=j)
         for s in sessions[-10:][::-1]:
-            when = "▸ сейчас" if s is live else \
+            when = t("now") if s is live else \
                 s["ts"][5:16].replace("T", " ").replace("-", ".")
             cpm = s["chars"] / (s["active_sec"] / 60) if s["active_sec"] else 0
             last.add_row(when, s["book"][:30], f"{s['active_sec'] / 60:.0f}",
@@ -776,17 +794,18 @@ class NaborApp(App):
         # type: (dict, Path | None, bool) -> None
         super().__init__()
         self.cfg = cfg
+        i18n.set_language(cfg["language"])
         self._start_path = book_path
         self._start_note = note
         self.book = None
         self.engine = None  # type: Engine | None
-        self.note_mode = False       # заметка — разовое упражнение без прогресса
-        self.last_book_path = None   # type: Path | None  # куда вернуться из заметки
+        self.note_mode = False       # a note is a one-off: no progress saved
+        self.last_book_path = None   # type: Path | None  # where a note returns
         self.last_book_title = ""
 
     def library_books(self):
         # type: () -> list[Path]
-        lib = Path(self.cfg["library_dir"])
+        lib = Path(self.cfg["library_dir"]).expanduser()
         books = []
         for pattern in BOOK_GLOBS:
             books.extend(lib.glob(pattern))
@@ -832,17 +851,15 @@ class NaborApp(App):
         self.last_book_title = book.title
         self._start_typing(book, chapter, offset)
         if not hash_ok:
-            self.notify("Текст книги изменился — позиция сброшена "
-                        "на начало главы", severity="warning", timeout=8)
+            self.notify(t("hash_changed"), severity="warning", timeout=8)
 
     def open_note(self):
         # type: () -> None
-        """Случайная заметка из Obsidian-хранилища: разовое упражнение —
-        прогресс не пишется, на полку не попадает."""
+        """Random note from the Obsidian vault: a one-off exercise — no
+        progress is saved and it never lands on the shelf."""
         vault = self.cfg["vault_dir"]
         if not vault:
-            self.notify("Хранилище не задано — укажи vault_dir в config.toml",
-                        severity="warning", timeout=8)
+            self.notify(t("no_vault"), severity="warning", timeout=8)
             return
         besides = self.book.path if self.note_mode and self.book else None
         try:
@@ -851,10 +868,10 @@ class NaborApp(App):
                                self.cfg["markdown"],
                                tuple(self.cfg["skip_paragraphs"]), besides)
         except (ValueError, OSError) as exc:
-            self.notify(f"Заметку не открыть: {exc}", severity="error",
+            self.notify(t("note_failed", error=exc), severity="error",
                         timeout=8)
             return
-        self.finish_session()  # книжную позицию сохранит, заметочную — нет
+        self.finish_session()  # saves the book position, never the note's
         self.note_mode = True
         self._start_typing(book)
 

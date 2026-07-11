@@ -1,13 +1,14 @@
-"""Markdown-заметки Obsidian → печатаемые строки.
+"""Obsidian markdown notes → typable lines.
 
-Строка заметки = абзац (Obsidian пишет абзац одной строкой, перенос —
-мягкий). "rendered" (дефолт): разметка снимается — печатаешь то, что видишь
-в режиме чтения. "raw": печатается исходник (frontmatter выкидывается всегда).
+A line of a note is a paragraph (Obsidian keeps a paragraph on one line and
+soft-wraps it). "rendered" (the default) strips the markup — you type what you
+see in reading mode. "raw" types the source (frontmatter is always dropped).
 
-Что не печатается: frontmatter, эмбеды картинок, таблицы, формулы, голые
-URL, эмодзи, сами маркеры разметки. Что остаётся: текст, маркеры списков
-("- пункт"), содержимое код-блоков (без ```-фенсов), заголовки без решёток,
-#теги. Ведущие отступы сохраняются — движок их проматывает, не печатая.
+Never typed: frontmatter, image embeds, tables, formulas, bare URLs, emoji and
+the markup characters themselves. Kept: text, list markers ("- item"), the
+contents of ordinary code blocks (without the ``` fences), headings without
+their hashes, #tags. Leading indents are kept — the engine winds past them
+instead of typing them.
 """
 
 import re
@@ -17,8 +18,8 @@ from nabor.normalize import normalize
 _FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n.*?\r?\n---[ \t]*(\r?\n|\Z)",
                           re.DOTALL)
 _FENCE = re.compile(r"^\s{0,3}(?:```|~~~)\s*([\w-]*)")
-# блоки плагинов: в Obsidian это не код, а отрендеренная таблица/диаграмма —
-# печатать исходник запроса бессмысленно
+# plugin blocks: in Obsidian these render as a table or a diagram, not as code —
+# typing the query source would be pointless
 _PLUGIN_LANGS = frozenset(("dataview", "dataviewjs", "tasks", "query",
                            "mermaid", "chart", "kanban-plugin", "meta-bind"))
 _TABLE_ROW = re.compile(r"^\s{0,3}\|")
@@ -42,20 +43,20 @@ _EMPHASIS = (
     (re.compile(r"\*\*(.+?)\*\*"), r"\1"),
     (re.compile(r"__(.+?)__"), r"\1"),
     (re.compile(r"\*(.+?)\*"), r"\1"),
-    (re.compile(r"(?<!\w)_(.+?)_(?!\w)"), r"\1"),  # snake_case не трогаем
+    (re.compile(r"(?<!\w)_(.+?)_(?!\w)"), r"\1"),  # leave snake_case alone
     (re.compile(r"==(.+?)=="), r"\1"),
     (re.compile(r"~~(.+?)~~"), r"\1"),
 )
 
 _EMOJI_RANGES = (
-    (0x1F000, 0x1FAFF),  # эмодзи и пиктограммы
-    (0x2190, 0x21FF),    # стрелки
-    (0x2300, 0x23FF),    # технические знаки
-    (0x2600, 0x27BF),    # разное, дингбаты
-    (0x2B00, 0x2BFF),    # фигуры
-    (0xFE00, 0xFE0F),    # вариационные селекторы (эмодзи-презентация)
-    (0x200D, 0x200D),    # ZWJ — склейка составных эмодзи
-    (0xFFFC, 0xFFFC),    # object replacement — след вставки в Obsidian
+    (0x1F000, 0x1FAFF),  # emoji and pictographs
+    (0x2190, 0x21FF),    # arrows
+    (0x2300, 0x23FF),    # technical symbols
+    (0x2600, 0x27BF),    # miscellaneous, dingbats
+    (0x2B00, 0x2BFF),    # shapes
+    (0xFE00, 0xFE0F),    # variation selectors (emoji presentation)
+    (0x200D, 0x200D),    # ZWJ — glues compound emoji together
+    (0xFFFC, 0xFFFC),    # object replacement — left behind by Obsidian embeds
 )
 _EMOJI = re.compile(
     "[" + "".join(f"{chr(a)}-{chr(b)}" for a, b in _EMOJI_RANGES) + "]")
@@ -75,12 +76,12 @@ def _strip_markup(text):
     text = _FOOTNOTE.sub("", text)
     text = _BARE_URL.sub("", text)
     text = _INLINE_MATH.sub("", text)
-    text = _INLINE_CODE.sub(r"\1", text)  # до эмфазы: `foo_bar` не станет курсивом
+    text = _INLINE_CODE.sub(r"\1", text)  # before emphasis: `foo_bar` is no italic
     for pattern, repl in _EMPHASIS:
         text = pattern.sub(repl, text)
-    text = text.replace("`", "")  # осиротевшие бэктики (внутри был эмодзи)
+    text = text.replace("`", "")  # orphaned backticks (an emoji lived inside)
     text = _HTML.sub("", text)
-    # на месте выкинутого (эмодзи, ссылки) остаётся дыра: "задача с , при"
+    # whatever was dropped (emoji, links) leaves a hole: "a task with , while"
     return _SPACE_BEFORE_PUNCT.sub(r"\1", text)
 
 
@@ -90,7 +91,7 @@ def md_to_lines(raw, table=None, mode="rendered"):
     render = mode != "raw"
     out = []  # type: list[str]
     in_code = False
-    skip_code = False  # блок плагина — не печатаем даже содержимое
+    skip_code = False  # a plugin block — not even its contents get typed
     in_math = False
 
     for line in raw.splitlines():
@@ -101,12 +102,12 @@ def md_to_lines(raw, table=None, mode="rendered"):
             in_code = not in_code
             skip_code = in_code and fence.group(1).lower() in _PLUGIN_LANGS
             if render:
-                continue  # фенсы — обёртка, не текст
+                continue  # fences are wrapping, not text
         elif in_code:
             if render:
                 if skip_code:
                     continue
-                # код печатается как написан: пробелы значимы, разметки нет
+                # code is typed as written: spaces matter, there is no markup
                 line = normalize(line, table, collapse=False)
                 if line.strip():
                     out.append(line)
@@ -120,11 +121,11 @@ def md_to_lines(raw, table=None, mode="rendered"):
             line = _QUOTE.sub("", line)
             line = _CALLOUT_HEAD.sub("", line)
             line = _HEADING.sub("", line)
-            line = _TASK.sub(r"\1", line)  # "- [ ] задача" → "- задача"
+            line = _TASK.sub(r"\1", line)  # "- [ ] task" → "- task"
             indent, body = _split_indent(line)
             body = normalize(_strip_markup(body), table)
-            # отступ значим только у вложенных списков; у прозы это случайный
-            # пробел из редактора — печатать его незачем
+            # an indent only matters on nested lists; on prose it is a stray
+            # space from the editor, and there is no point typing it
             if not _LIST_ITEM.match(body):
                 indent = ""
             line = indent + body if body else ""

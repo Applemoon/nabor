@@ -1,5 +1,5 @@
-"""Ядро набора: позиция, блокирующий ввод с хвостом ошибок, навигация,
-статистика. Без Textual — чистая логика."""
+"""Typing core: position, blocking input with an error tail, navigation,
+statistics. No Textual here — plain logic."""
 
 import re
 import time
@@ -10,36 +10,36 @@ _SENTENCE_END = re.compile(r"[.!?]+[\")']*\s")
 
 
 class Result(Enum):
-    OK = 1        # верный символ, позиция сдвинулась
-    MISTAKE = 2   # неверный, лёг в хвост
-    BLOCKED = 3   # хвост полон, ввод не принят
-    DONE = 4      # верный символ, глава закончена
+    OK = 1        # correct character, position moved on
+    MISTAKE = 2   # wrong character, landed in the tail
+    BLOCKED = 3   # tail is full, input rejected
+    DONE = 4      # correct character, chapter finished
 
 
 class Stats:
-    """Статистика сессии. Активное время: паузы длиннее idle_timeout
-    не считаются."""
+    """Session statistics. Active time: pauses longer than idle_timeout do not
+    count."""
 
     def __init__(self, idle_timeout=5.0, clock=time.monotonic):
         self.idle_timeout = idle_timeout
         self._clock = clock
         self._last_event = None  # type: float | None
         self.active_sec = 0.0
-        self.chars = 0       # верно набранные
+        self.chars = 0       # correctly typed
         self.errors = 0
-        self.char_errors = Counter()  # type: Counter[str]  # ожидаемый символ → промахи
-        self._recent = deque()  # type: deque[float]  # времена верных символов (для живого WPM)
+        self.char_errors = Counter()  # type: Counter[str]  # expected char → misses
+        self._recent = deque()  # type: deque[float]  # times of hits, for live WPM
 
     def pause(self):
         # type: () -> None
-        """Явная пауза (открыта модалка/меню): время до следующего
-        нажатия не будет засчитано, каким бы коротким оно ни было."""
+        """Explicit pause (a modal or the menu is open): the gap until the next
+        keypress will not count, however short it turns out to be."""
         self._last_event = None
 
     def touch(self):
         # type: () -> None
-        """Нажатие, которое не идёт ни в верные, ни в ошибки (повторный
-        промах по тому же символу), но время набора продолжает идти."""
+        """A keypress that counts neither as a hit nor as an error (another
+        miss on the same character), but typing time keeps running."""
         self._tick()
 
     def _tick(self):
@@ -67,7 +67,7 @@ class Stats:
     @property
     def wpm(self):
         # type: () -> float
-        """Средний WPM по активному времени сессии (слово = 5 символов)."""
+        """Average WPM over the session's active time (a word = 5 chars)."""
         if self.active_sec < 1:
             return 0.0
         return self.chars / 5 / (self.active_sec / 60)
@@ -75,7 +75,7 @@ class Stats:
     @property
     def cpm_now(self):
         # type: () -> float
-        """Скользящие знаки в минуту за последнюю минуту."""
+        """Rolling characters per minute over the last minute."""
         now = self._clock()
         while self._recent and now - self._recent[0] > 60:
             self._recent.popleft()
@@ -87,7 +87,7 @@ class Stats:
     @property
     def wpm_now(self):
         # type: () -> float
-        """Скользящий WPM за последнюю минуту (слово = 5 знаков)."""
+        """Rolling WPM over the last minute (a word = 5 chars)."""
         return self.cpm_now / 5
 
     @property
@@ -119,20 +119,21 @@ class Engine:
         self.book = book
         self.chapter_idx = min(chapter, len(book.chapters) - 1)
         self.offset = offset
-        self.tail = []  # type: list[str]  # ошибочно набранные символы
-        self._missed = False  # промах по текущему символу уже засчитан
+        self.tail = []  # type: list[str]  # characters typed wrong
+        self._missed = False  # the current character already counted as a miss
         self.error_tail_max = error_tail_max
         self.stats = Stats(idle_timeout, clock)
         self._chapter_lens = [len(c.text) + 1 for c in book.chapters]
         self._total = sum(self._chapter_lens)
         self._load_chapter()
 
-    # --- текущая глава ---------------------------------------------------
+    # --- current chapter --------------------------------------------------
 
     def _skip_indent(self, i):
         # type: (int) -> int
-        """Ведущие пробелы строки (отступ кода и вложенных списков) видны, но
-        не печатаются: позиция внутри отступа проматывается к первой букве."""
+        """Leading spaces of a line (indent of code and nested lists) are shown
+        but not typed: a position inside the indent winds on to the first
+        character."""
         line_start = self.text.rfind("\n", 0, i) + 1
         j = line_start
         while j < len(self.text) and self.text[j] == " ":
@@ -145,8 +146,9 @@ class Engine:
         self.offset = self._skip_indent(min(self.offset, len(self.text)))
         self.tail.clear()
         self._missed = False
-        # границы предложений и абзацев (индексы начал, отступ уже промотан —
-        # иначе prev_paragraph залипал бы: прыжок на начало строки → скип → там же)
+        # sentence and paragraph boundaries (start indices, indent already
+        # skipped — otherwise prev_paragraph would stick: jump to the line
+        # start → skip the indent → same position again)
         starts = {0}
         for m in _SENTENCE_END.finditer(self.text):
             starts.add(m.end())
@@ -184,7 +186,7 @@ class Engine:
         done = sum(self._chapter_lens[:self.chapter_idx]) + self.offset
         return done / self._total * 100
 
-    # --- ввод -------------------------------------------------------------
+    # --- input ------------------------------------------------------------
 
     def type_char(self, ch):
         # type: (str) -> Result
@@ -193,32 +195,32 @@ class Engine:
             return Result.BLOCKED
         if not self.tail and ch == expected:
             self.offset += 1
-            if ch == "\n":  # новая строка — отступ проматываем, не печатаем
+            if ch == "\n":  # new line — the indent is skipped, not typed
                 self.offset = self._skip_indent(self.offset)
             self._missed = False
             self.stats.hit()
             return Result.DONE if self.chapter_done else Result.OK
-        # затык по символу = одна ошибка, сколько бы неверных клавиш
-        # ни было нажато, пока символ не набран верно
+        # getting stuck on a character = one error, no matter how many wrong
+        # keys are pressed before it is finally typed right
         if self._missed:
             self.stats.touch()
         else:
             self.stats.miss(expected)
             self._missed = True
         if len(self.tail) >= self.error_tail_max:
-            return Result.BLOCKED  # хвост полон (или отключён нулём)
+            return Result.BLOCKED  # tail is full (or switched off with a zero)
         self.tail.append(ch)
         return Result.MISTAKE
 
     def backspace(self):
         # type: () -> bool
-        """Стирает только хвост ошибок; верно набранное не трогаем."""
+        """Erases the error tail only; correctly typed text stays."""
         if self.tail:
             self.tail.pop()
             return True
         return False
 
-    # --- навигация (позицию двигает, статистику не начисляет) -------------
+    # --- navigation (moves the position, never scores statistics) ----------
 
     def _goto(self, offset):
         # type: (int) -> None
@@ -260,7 +262,7 @@ class Engine:
 
     def goto(self, chapter_idx, offset=0):
         # type: (int, int) -> None
-        """Прыжок в главу к началу предложения, содержащего offset."""
+        """Jump into a chapter, to the start of the sentence holding offset."""
         self.chapter_idx = max(0, min(chapter_idx, len(self.book.chapters) - 1))
         self.offset = 0
         self._load_chapter()

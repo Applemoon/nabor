@@ -1,38 +1,38 @@
-"""Нормализация типографики: текст книги приводится к тому, что реально
-набирается с клавиатуры. Видишь = печатаешь."""
+"""Typography normalization: book text is reduced to what a keyboard can
+actually type. What you see is what you type."""
 
 import re
 
-# символ книги → что показываем и печатаем (значение может быть многосимвольным)
+# book character → what we show and type (the value may be several characters)
 DEFAULT_TABLE = {
-    "—": "-",    # — em dash
-    "–": "-",    # – en dash
-    "−": "-",    # − minus
-    "«": '"',    # «
-    "»": '"',    # »
-    "„": '"',    # „
-    "“": '"',    # “
-    "”": '"',    # ”
-    "‘": "'",    # ‘
-    "’": "'",    # ’
-    "…": "...",  # …
-    " ": " ",    # nbsp
-    " ": " ",    # thin space
+    "—": "-",    # em dash
+    "–": "-",    # en dash
+    "−": "-",    # minus sign
+    "«": '"',    # guillemets, both flavours of curly quotes below
+    "»": '"',
+    "„": '"',
+    "“": '"',
+    "”": '"',
+    "‘": "'",
+    "’": "'",
+    "…": "...",  # ellipsis
+    " ": " ",    # nbsp
+    " ": " ",    # thin space
     "­": "",     # soft hyphen
-    "ё": "е",
+    "ё": "е",    # Russian yo → ye: nobody types it, most books skip it anyway
     "Ё": "Е",
 }
 
 _WS_RUN = re.compile(r"\s+")
 
-# кэш translate-словаря: normalize зовётся на каждый абзац с одной и той же таблицей
+# cache of translate tables: normalize runs on every paragraph with the same dict
 _prepared = {}  # type: dict[int, dict[int, str]]
 
 
 def normalize(text, table=None, collapse=True):
     # type: (str, dict[str, str] | None, bool) -> str
-    """collapse=False сохраняет пробелы как есть — для кода и отступов в
-    заметках, где выравнивание значимо."""
+    """collapse=False keeps whitespace as-is — for code and list indents in
+    notes, where alignment carries meaning."""
     table = DEFAULT_TABLE if table is None else table
     trans = _prepared.get(id(table))
     if trans is None:

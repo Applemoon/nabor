@@ -1,8 +1,10 @@
 [project]
 name = "nabor"
 version = "0.1.0"
-description = "TUI-тренажёр печати по книгам (fb2/txt)"
+description = "TUI typing trainer that types your books (fb2/txt/md)"
 requires-python = ">=3.11"
+license = "0BSD"
+license-files = ["LICENSE"]
 dependencies = ["textual"]
 
 [project.scripts]
