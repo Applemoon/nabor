@@ -1,12 +1,17 @@
 """Textual-приложение: экран набора (окно строк с курсором по центру),
 статус-бар, футер с хоткеями, полка книг."""
 
+from collections import Counter
+from datetime import datetime, timedelta
 from pathlib import Path
 
+from rich import box
+from rich.console import Group
+from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, OptionList, Static
 from textual.widgets.option_list import Option
@@ -44,9 +49,10 @@ class TypingArea(Static):
 
     engine = None  # type: Engine | None
 
-    def __init__(self, window_lines):
+    def __init__(self, window_lines, cursor_style):
         super().__init__()
         self.window_lines = window_lines
+        self.cursor_style = cursor_style
         self._cache_key = None
         self._lines = []  # type: list[tuple[int, int]]
 
@@ -91,12 +97,28 @@ class TypingArea(Static):
                     shown = "¶" if wrong == "\n" else (wrong if wrong.isprintable() and wrong != " " else shown)
                     style = theme.MISTAKE
                 elif pos == cursor_pos:
-                    style = theme.CURSOR
+                    style = self.cursor_style
                 else:
                     style = theme.DIM if ch == "\n" else theme.UNTYPED
                 out.append(shown, style)
             if cursor_pos == len(e.text) and i == len(lines) - 1:
-                out.append(" ", theme.CURSOR)  # курсор за последним символом
+                out.append(" ", self.cursor_style)  # курсор за последним символом
+        return out
+
+
+class BookProgress(Static):
+    """Полноширинный прогресс-бар книги."""
+
+    engine = None  # type: Engine | None
+
+    def render(self):
+        if self.engine is None:
+            return ""
+        width = max(10, self.size.width)
+        filled = round(width * self.engine.percent / 100)
+        out = Text(no_wrap=True, end="")
+        out.append("━" * filled, theme.ORANGE)
+        out.append("━" * (width - filled), theme.BG2)
         return out
 
 
@@ -112,7 +134,8 @@ class StatusBar(Horizontal):
         left = (f" {book.title} · Гл. {engine.chapter_idx + 1}/{n}"
                 f" · {engine.percent:.1f}%")
         s = engine.stats
-        right = f"{s.wpm_now:.0f} wpm · {s.accuracy:.0f}% "
+        right = (f"{s.cpm_now:.0f} зн/мин · {s.wpm_now:.0f} wpm"
+                 f" · {s.accuracy:.0f}% ")
         self.query_one("#status-left", Static).update(left)
         self.query_one("#status-right", Static).update(right)
 
@@ -128,18 +151,23 @@ class TypingScreen(Screen):
         Binding("pageup", "prev_chapter", "глава", key_display="⇞"),
         Binding("pagedown", "next_chapter", "глава", key_display="⇟"),
         Binding("ctrl+b", "app.shelf", "Полка"),
+        Binding("ctrl+s", "app.stats", "Статистика"),
     ]
 
     def compose(self):
         # type: () -> ComposeResult
         yield Static(id="banner")
-        yield TypingArea(self.app.cfg["window_lines"])
+        cursor = theme.CURSOR_BLOCK if self.app.cfg["cursor"] == "block" \
+            else theme.CURSOR_LINE
+        yield TypingArea(self.app.cfg["window_lines"], cursor)
+        yield BookProgress(id="book-progress")
         yield StatusBar(id="status")
         yield Footer()
 
     def on_mount(self):
         # type: () -> None
         self.query_one(TypingArea).engine = self.app.engine
+        self.query_one(BookProgress).engine = self.app.engine
         self.refresh_all()
         self.set_interval(1.0, self.update_status)
 
@@ -202,6 +230,7 @@ class TypingScreen(Screen):
         # type: () -> None
         self.query_one(StatusBar).update_status(self.app.engine,
                                                 self.app.book)
+        self.query_one(BookProgress).refresh()
 
 
 class ShelfScreen(Screen):
@@ -244,6 +273,85 @@ class ShelfScreen(Screen):
             self.app.exit()
 
 
+class StatsScreen(Screen):
+    BINDINGS = [Binding("escape", "back", "Назад")]
+
+    def compose(self):
+        # type: () -> ComposeResult
+        yield Static(Text("Статистика", style=f"bold {theme.YELLOW}",
+                          justify="center"), id="banner")
+        with VerticalScroll(id="stats-scroll"):
+            yield Static(id="stats-body")
+        yield Footer()
+
+    def on_mount(self):
+        # type: () -> None
+        self.query_one("#stats-body", Static).update(self._build())
+
+    def _build(self):
+        sessions = storage.read_sessions()
+        live = None
+        if self.app.engine is not None:
+            live = self.app.engine.stats.session_record(self.app.book.title)
+            if live:
+                sessions.append(live)
+        if not sessions:
+            return Text("Пока пусто — напечатай что-нибудь.", style=theme.GRAY)
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        def row(label, sel):
+            active = sum(s["active_sec"] for s in sel)
+            chars = sum(s["chars"] for s in sel)
+            errors = sum(s["errors"] for s in sel)
+            cpm = chars / (active / 60) if active else 0
+            acc = chars / (chars + errors) * 100 if chars + errors else 100
+            return (label, str(len(sel)), f"{active / 60:.0f} мин",
+                    f"{chars}", f"{cpm:.0f}", f"{cpm / 5:.0f}", f"{acc:.0f}%")
+
+        totals = Table(box=box.SIMPLE_HEAD, header_style=theme.GRAY,
+                       style=theme.FG, pad_edge=False)
+        for col in ("", "сессий", "время", "знаков", "зн/мин", "wpm", "точн."):
+            totals.add_column(col, justify="right" if col else "left")
+        totals.add_row(*row("Сегодня",
+                            [s for s in sessions if s["ts"] >= today]))
+        totals.add_row(*row("7 дней",
+                            [s for s in sessions if s["ts"] >= week_ago]))
+        totals.add_row(*row("Всё время", sessions))
+
+        errs = Counter()  # type: Counter[str]
+        for s in sessions:
+            errs.update(s.get("char_errors", {}))
+        show = {" ": "␣", "\n": "¶"}
+        top = "  ".join(f"{show.get(c, c)}×{n}" for c, n in errs.most_common(10))
+        errors_line = Text.assemble(
+            ("Промахи по символам:  ", theme.GRAY),
+            (top or "нет", f"bold {theme.RED if top else theme.GREEN}"))
+
+        last = Table(box=box.SIMPLE_HEAD, header_style=theme.GRAY,
+                     style=theme.FG, pad_edge=False,
+                     title="Последние сессии", title_style=theme.GRAY)
+        for col, j in (("когда", "left"), ("книга", "left"), ("мин", "right"),
+                       ("знаков", "right"), ("зн/мин", "right"),
+                       ("wpm", "right"), ("точн.", "right")):
+            last.add_column(col, justify=j)
+        for s in sessions[-10:][::-1]:
+            when = "▸ сейчас" if s is live else \
+                s["ts"][5:16].replace("T", " ").replace("-", ".")
+            cpm = s["chars"] / (s["active_sec"] / 60) if s["active_sec"] else 0
+            last.add_row(when, s["book"][:30], f"{s['active_sec'] / 60:.0f}",
+                         str(s["chars"]), f"{cpm:.0f}", f"{cpm / 5:.0f}",
+                         f"{s['accuracy']:.0f}%",
+                         style=theme.AQUA if s is live else None)
+
+        return Group(totals, Text(), errors_line, Text(), last)
+
+    def action_back(self):
+        # type: () -> None
+        self.app.pop_screen()
+
+
 class NaborApp(App):
     TITLE = "nabor"
     ENABLE_COMMAND_PALETTE = False
@@ -263,10 +371,17 @@ class NaborApp(App):
         content-align: center middle;
         padding: 0 2;
     }}
+    #book-progress {{
+        height: 1;
+    }}
     #status {{
         height: 1;
         background: {theme.BG1};
         color: {theme.GRAY};
+    }}
+    #stats-scroll {{
+        height: 1fr;
+        margin: 1 4;
     }}
     #status-left {{ width: 1fr; }}
     #status-right {{ width: auto; }}
@@ -343,6 +458,11 @@ class NaborApp(App):
         # type: () -> None
         if not isinstance(self.screen, ShelfScreen):
             self.push_screen(ShelfScreen())
+
+    def action_stats(self):
+        # type: () -> None
+        if not isinstance(self.screen, StatsScreen):
+            self.push_screen(StatsScreen())
 
     async def action_quit(self):
         # type: () -> None

@@ -53,6 +53,17 @@ def last_opened_book():
     return max(progress, key=lambda k: progress[k].get("last_opened", ""))
 
 
+def read_sessions():
+    # type: () -> list[dict]
+    if not STATS_PATH.exists():
+        return []
+    out = []
+    for line in STATS_PATH.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            out.append(json.loads(line))
+    return out
+
+
 def append_session(record):
     # type: (dict | None) -> None
     if not record:

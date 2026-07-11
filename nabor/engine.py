@@ -61,16 +61,22 @@ class Stats:
         return self.chars / 5 / (self.active_sec / 60)
 
     @property
-    def wpm_now(self):
+    def cpm_now(self):
         # type: () -> float
-        """Скользящий WPM за последнюю минуту."""
+        """Скользящие знаки в минуту за последнюю минуту."""
         now = self._clock()
         while self._recent and now - self._recent[0] > 60:
             self._recent.popleft()
         if not self._recent:
             return 0.0
         span = max(now - self._recent[0], 5.0)
-        return len(self._recent) / 5 / (span / 60)
+        return len(self._recent) / (span / 60)
+
+    @property
+    def wpm_now(self):
+        # type: () -> float
+        """Скользящий WPM за последнюю минуту (слово = 5 знаков)."""
+        return self.cpm_now / 5
 
     @property
     def accuracy(self):
