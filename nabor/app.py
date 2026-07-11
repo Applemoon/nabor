@@ -387,8 +387,23 @@ class MenuScreen(ModalScreen):
         self.dismiss()
 
 
+class FormSelect(Select):
+    """Select для формы: стрелки ходят по полям, варианты — только по
+    Enter/Space (дефолтный Select раскрывается и стрелками — в форме это
+    ломает навигацию)."""
+
+    BINDINGS = [
+        Binding("down", "app.focus_next", show=False),
+        Binding("up", "app.focus_previous", show=False),
+    ]
+
+
 class SettingsScreen(Screen):
     BINDINGS = [Binding("escape", "back", "Назад"),
+                Binding("down", "app.focus_next", "след. поле",
+                        key_display="↓"),
+                Binding("up", "app.focus_previous", "пред. поле",
+                        key_display="↑"),
                 Binding("ctrl+r", "reset", "Сбросить дефолты")]
 
     NUM_FIELDS = [
@@ -405,9 +420,9 @@ class SettingsScreen(Screen):
         with Vertical(id="settings-form"):
             with Horizontal(classes="settings-row"):
                 yield Label("Курсор")
-                yield Select([("линия", "line"), ("блок", "block")],
-                             value=self.app.cfg["cursor"],
-                             allow_blank=False, id="set-cursor")
+                yield FormSelect([("линия", "line"), ("блок", "block")],
+                                 value=self.app.cfg["cursor"],
+                                 allow_blank=False, id="set-cursor")
             for key, label, _, _ in self.NUM_FIELDS:
                 with Horizontal(classes="settings-row"):
                     yield Label(label)
