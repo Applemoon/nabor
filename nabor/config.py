@@ -1,20 +1,25 @@
-"""Конфиг: дефолты в коде, config.toml перекрывает. Приложение конфиг
-никогда не пишет — только читает при старте."""
+"""Конфиг: дефолты в коде ← config.toml (правится руками, приложение его
+никогда не пишет) ← settings.json (пишется диалогом настроек в UI)."""
 
+import json
 import tomllib
 from pathlib import Path
 
 from nabor.normalize import DEFAULT_TABLE
 
 ROOT = Path(__file__).resolve().parent.parent  # корень репо = папка данных
+SETTINGS_PATH = ROOT / "settings.json"
 
 DEFAULTS = {
     "library_dir": str(ROOT / "library"),
     "window_lines": 5,        # строк текста на экране (3–5)
-    "error_tail_max": 4,      # длина красного хвоста ошибок
+    "error_tail_max": 4,      # хвост ошибок; 0 = жёсткая блокировка
     "idle_timeout": 5.0,      # секунд простоя до автопаузы
     "cursor": "line",         # "line" (подчёркивание) или "block"
 }
+
+# ключи, которые правит диалог настроек в UI (уходят в settings.json)
+UI_KEYS = ("cursor", "error_tail_max", "window_lines", "idle_timeout")
 
 
 def load_config(path=None):
@@ -30,4 +35,14 @@ def load_config(path=None):
         if table is not None:
             cfg["normalize"] = table
         cfg.update({k: v for k, v in user.items() if k in DEFAULTS})
+    if SETTINGS_PATH.exists():
+        ui = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        cfg.update({k: v for k, v in ui.items() if k in UI_KEYS})
     return cfg
+
+
+def save_ui_settings(cfg):
+    # type: (dict) -> None
+    SETTINGS_PATH.write_text(
+        json.dumps({k: cfg[k] for k in UI_KEYS}, ensure_ascii=False, indent=2),
+        encoding="utf-8")

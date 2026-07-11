@@ -165,18 +165,14 @@ class Engine:
         expected = self.expected
         if expected is None:
             return Result.BLOCKED
-        if self.tail:
-            if len(self.tail) >= self.error_tail_max:
-                return Result.BLOCKED
-            self.tail.append(ch)
-            self.stats.miss(expected)
-            return Result.MISTAKE
-        if ch == expected:
+        if not self.tail and ch == expected:
             self.offset += 1
             self.stats.hit()
             return Result.DONE if self.chapter_done else Result.OK
-        self.tail.append(ch)
         self.stats.miss(expected)
+        if len(self.tail) >= self.error_tail_max:
+            return Result.BLOCKED  # хвост полон (или отключён нулём)
+        self.tail.append(ch)
         return Result.MISTAKE
 
     def backspace(self):
@@ -225,6 +221,15 @@ class Engine:
             self._goto(prev[-1])
         elif self.chapter_idx > 0:
             self.prev_chapter(to_end=True)
+
+    def goto(self, chapter_idx, offset=0):
+        # type: (int, int) -> None
+        """Прыжок в главу к началу предложения, содержащего offset."""
+        self.chapter_idx = max(0, min(chapter_idx, len(self.book.chapters) - 1))
+        self.offset = 0
+        self._load_chapter()
+        starts = [s for s in self.sentence_starts if s <= offset]
+        self._goto(starts[-1] if starts else 0)
 
     def next_chapter(self):
         # type: () -> bool

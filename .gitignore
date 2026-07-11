@@ -7,3 +7,4 @@ stats.jsonl
 __pycache__/
 *.pyc
 *.egg-info/
+settings.json

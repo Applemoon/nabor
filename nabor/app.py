@@ -11,13 +11,14 @@ from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
-from textual.screen import Screen
-from textual.widgets import Footer, OptionList, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Footer, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
 from nabor import storage, theme
 from nabor.book import load_book
+from nabor.config import save_ui_settings
 from nabor.engine import Engine, Result
 
 BOOK_GLOBS = ("*.fb2", "*.fb2.zip", "*.zip", "*.txt")
@@ -143,7 +144,8 @@ class StatusBar(Horizontal):
 class TypingScreen(Screen):
     AUTO_FOCUS = None
     BINDINGS = [
-        Binding("escape", "app.quit", "Выход"),
+        Binding("escape", "menu", "Меню"),
+        Binding("ctrl+f", "app.search", "Поиск"),
         Binding("left", "prev_sentence", "←предл", key_display="←"),
         Binding("right", "next_sentence", "предл→", key_display="→"),
         Binding("up", "prev_paragraph", "↑абзац", key_display="↑"),
@@ -170,6 +172,25 @@ class TypingScreen(Screen):
         self.query_one(BookProgress).engine = self.app.engine
         self.refresh_all()
         self.set_interval(1.0, self.update_status)
+
+    def on_screen_resume(self):
+        # type: () -> None
+        """Применить настройки, которые могли поменять в диалоге."""
+        if self.app.engine is None:  # выход через меню: сессия уже закрыта
+            return
+        cfg = self.app.cfg
+        area = self.query_one(TypingArea)
+        area.window_lines = cfg["window_lines"]
+        area.cursor_style = theme.CURSOR_BLOCK if cfg["cursor"] == "block" \
+            else theme.CURSOR_LINE
+        e = self.app.engine
+        e.error_tail_max = cfg["error_tail_max"]
+        e.stats.idle_timeout = cfg["idle_timeout"]
+        self.refresh_all()
+
+    def action_menu(self):
+        # type: () -> None
+        self.app.push_screen(MenuScreen())
 
     # --- ввод ---
 
@@ -271,6 +292,160 @@ class ShelfScreen(Screen):
             self.app.pop_screen()
         else:
             self.app.exit()
+
+
+class MenuScreen(ModalScreen):
+    BINDINGS = [Binding("escape", "close", "Продолжить")]
+
+    ITEMS = [
+        ("continue", "Продолжить"),
+        ("settings", "Настройки"),
+        ("stats", "Статистика"),
+        ("shelf", "Библиотека"),
+        ("quit", "Выйти"),
+    ]
+
+    def compose(self):
+        # type: () -> ComposeResult
+        with Vertical(id="menu-panel"):
+            yield Static(Text("nabor", style=f"bold {theme.YELLOW}",
+                              justify="center"), id="menu-title")
+            yield OptionList(*[Option(label, id=key)
+                               for key, label in self.ITEMS])
+
+    def on_option_list_option_selected(self, event):
+        # type: (object) -> None
+        self.dismiss()
+        action = event.option.id
+        if action == "settings":
+            self.app.push_screen(SettingsScreen())
+        elif action == "stats":
+            self.app.push_screen(StatsScreen())
+        elif action == "shelf":
+            self.app.push_screen(ShelfScreen())
+        elif action == "quit":
+            self.app.quit_app()
+
+    def action_close(self):
+        # type: () -> None
+        self.dismiss()
+
+
+class SettingsScreen(Screen):
+    BINDINGS = [Binding("escape", "back", "Назад")]
+
+    FIELDS = [
+        ("cursor", "Курсор", ["line", "block"]),
+        ("error_tail_max", "Хвост ошибок (0 = блокировка)",
+         list(range(0, 9))),
+        ("window_lines", "Строк текста", list(range(1, 10))),
+        ("idle_timeout", "Автопауза, сек", [3.0, 5.0, 10.0, 15.0]),
+    ]
+    LABELS = {"line": "линия", "block": "блок"}
+
+    def compose(self):
+        # type: () -> ComposeResult
+        yield Static(Text("Настройки", style=f"bold {theme.YELLOW}",
+                          justify="center"), id="banner")
+        yield OptionList(id="settings-list")
+        yield Static(Text("Enter — переключить значение · сохраняется в "
+                          "settings.json (config.toml не трогается)",
+                          style=theme.DIM, justify="center"), id="settings-hint")
+        yield Footer()
+
+    def on_mount(self):
+        # type: () -> None
+        self._rebuild(0)
+
+    def _rebuild(self, highlight):
+        # type: (int) -> None
+        ol = self.query_one("#settings-list", OptionList)
+        ol.clear_options()
+        for key, label, _ in self.FIELDS:
+            val = self.app.cfg[key]
+            shown = self.LABELS.get(val, val)
+            if isinstance(shown, float):
+                shown = f"{shown:g}"
+            ol.add_option(Option(
+                Text.assemble((f"{label:<32}", theme.FG),
+                              ("◂ ", theme.DIM),
+                              (f"{shown}", f"bold {theme.ORANGE}"),
+                              (" ▸", theme.DIM)), id=key))
+        ol.highlighted = highlight
+        ol.focus()
+
+    def on_option_list_option_selected(self, event):
+        # type: (object) -> None
+        idx = event.option_index
+        key, _, values = self.FIELDS[idx]
+        try:
+            i = values.index(self.app.cfg[key])
+        except ValueError:
+            i = -1
+        self.app.cfg[key] = values[(i + 1) % len(values)]
+        save_ui_settings(self.app.cfg)
+        self._rebuild(idx)
+
+    def action_back(self):
+        # type: () -> None
+        self.app.pop_screen()
+
+
+class SearchScreen(ModalScreen):
+    BINDINGS = [Binding("escape", "close", "Закрыть")]
+    MAX_RESULTS = 50
+
+    def compose(self):
+        # type: () -> ComposeResult
+        with Vertical(id="search-panel"):
+            yield Input(placeholder="Поиск по книге…", id="search-input")
+            yield OptionList(id="search-results")
+
+    def on_input_changed(self, event):
+        # type: (object) -> None
+        ol = self.query_one("#search-results", OptionList)
+        ol.clear_options()
+        q = event.value.strip().lower()
+        if len(q) < 2:
+            return
+        count = 0
+        for ci, chapter in enumerate(self.app.book.chapters):
+            low = chapter.text.lower()
+            pos = low.find(q)
+            while pos != -1 and count < self.MAX_RESULTS:
+                snippet = Text.assemble(
+                    (f"Гл. {ci + 1:>3}  ", theme.YELLOW),
+                    ("…" + chapter.text[max(0, pos - 25):pos].replace("\n", " "),
+                     theme.GRAY),
+                    (chapter.text[pos:pos + len(q)], f"bold {theme.ORANGE}"),
+                    (chapter.text[pos + len(q):pos + len(q) + 35]
+                     .replace("\n", " ") + "…", theme.GRAY))
+                ol.add_option(Option(snippet, id=f"{ci}|{pos}"))
+                count += 1
+                pos = low.find(q, pos + len(q))
+            if count >= self.MAX_RESULTS:
+                break
+
+    def on_input_submitted(self, event):
+        # type: (object) -> None
+        ol = self.query_one("#search-results", OptionList)
+        if ol.option_count:
+            self._jump(ol.get_option_at_index(0).id)
+
+    def on_option_list_option_selected(self, event):
+        # type: (object) -> None
+        self._jump(event.option.id)
+
+    def _jump(self, option_id):
+        # type: (str) -> None
+        ci, pos = map(int, option_id.split("|"))
+        self.app.engine.goto(ci, pos)
+        self.app.save_position()
+        self.dismiss()
+
+    def action_close(self):
+        # type: () -> None
+        self.dismiss()
 
 
 class StatsScreen(Screen):
@@ -383,6 +558,63 @@ class NaborApp(App):
         height: 1fr;
         margin: 1 4;
     }}
+    OptionList > .option-list--option-highlighted {{
+        background: {theme.BG2};
+        color: {theme.FG};
+        text-style: bold;
+    }}
+    OptionList:focus > .option-list--option-highlighted {{
+        background: {theme.BG2};
+    }}
+    Input {{
+        background: {theme.BG1};
+    }}
+    Input > .input--cursor {{
+        background: {theme.ORANGE};
+        color: {theme.BG};
+    }}
+    MenuScreen, SearchScreen {{
+        align: center middle;
+        background: {theme.BG} 60%;
+    }}
+    #menu-panel {{
+        width: 36;
+        height: auto;
+        border: round {theme.ORANGE};
+        background: {theme.BG};
+        padding: 1 2;
+    }}
+    #menu-panel OptionList, #search-results, #settings-list {{
+        background: transparent;
+        border: none;
+    }}
+    #menu-panel OptionList {{
+        height: auto;
+    }}
+    #search-panel {{
+        width: 90;
+        max-width: 95%;
+        height: auto;
+        border: round {theme.ORANGE};
+        background: {theme.BG};
+        padding: 1 2;
+    }}
+    #search-input {{
+        background: {theme.BG1};
+        border: none;
+        margin-bottom: 1;
+    }}
+    #search-results {{
+        height: auto;
+        max-height: 14;
+    }}
+    #settings-list {{
+        height: 1fr;
+        margin: 1 4;
+    }}
+    #settings-hint {{
+        height: 1;
+    }}
     #status-left {{ width: 1fr; }}
     #status-right {{ width: auto; }}
     #shelf {{
@@ -464,7 +696,17 @@ class NaborApp(App):
         if not isinstance(self.screen, StatsScreen):
             self.push_screen(StatsScreen())
 
-    async def action_quit(self):
+    def action_search(self):
+        # type: () -> None
+        if self.engine is not None and not isinstance(self.screen,
+                                                      SearchScreen):
+            self.push_screen(SearchScreen())
+
+    def quit_app(self):
         # type: () -> None
         self.finish_session()
         self.exit()
+
+    async def action_quit(self):
+        # type: () -> None
+        self.quit_app()
