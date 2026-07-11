@@ -10,6 +10,19 @@ from nabor.normalize import DEFAULT_TABLE
 ROOT = Path(__file__).resolve().parent.parent  # корень репо = папка данных
 SETTINGS_PATH = ROOT / "settings.json"
 
+# Издательские врезки: рекламные абзацы, которые пихают в fb2 при выкладке
+# (литрес, royallib, hpmor.ru). Универсального признака у них нет — ловим
+# по знакомым формулировкам; свои паттерны добавляются в config.toml.
+DEFAULT_SKIP_PARAGRAPHS = [
+    r"^Мы рады представить вам электронную версию",
+    r"^Опубликовано на .*https?://",
+    r"^Текст предоставлен правообладател",
+    r"купив полную легальную версию",
+    r"Эта книга была куплена в интернет-магазине",
+    r"^Данный файл (был )?(скачан|получен)",
+    r"заходите к нам на https?://",
+]
+
 DEFAULTS = {
     "library_dir": str(ROOT / "library"),
     "lines_before": 2,        # строк набранного текста над курсорной строкой
@@ -17,6 +30,8 @@ DEFAULTS = {
     "error_tail_max": 4,      # хвост ошибок; 0 = жёсткая блокировка
     "idle_timeout": 5.0,      # стоп таймера после стольких секунд простоя
     "cursor": "line",         # "line" (подчёркивание) или "block"
+    "skip_epigraphs": False,  # эпиграфы fb2 печатаются (в HPMOR это шутки автора)
+    "skip_paragraphs": DEFAULT_SKIP_PARAGRAPHS,  # regex издательских врезок
 }
 
 # ключи, которые правит диалог настроек в UI (уходят в settings.json)

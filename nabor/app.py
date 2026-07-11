@@ -777,7 +777,9 @@ class NaborApp(App):
     def open_book(self, path):
         # type: (Path) -> None
         self.finish_session()
-        self.book = load_book(path, self.cfg["normalize"])
+        self.book = load_book(path, self.cfg["normalize"],
+                              self.cfg["skip_epigraphs"],
+                              tuple(self.cfg["skip_paragraphs"]))
         chapter, offset, hash_ok = storage.get_position(self.book)
         self.engine = Engine(self.book, chapter, offset,
                              error_tail_max=self.cfg["error_tail_max"],
